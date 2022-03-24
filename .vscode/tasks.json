@@ -1,0 +1,56 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        // CMake tasks
+        {
+            "label": "Run CMake (Debug)",
+            "type": "shell",
+            "command": "cmake",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "args": [
+                ".",
+                "-Bbuild",
+                "-DCMAKE_BUILD_TYPE=Debug"
+            ],
+        },
+        {
+            "label": "Run CMake (Release)",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "windows": {
+                "command": "cmake.exe",
+                "args": [
+                    ".",
+                    "-Bbuild",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-G",
+                    "NMake Makefiles"
+                ]
+            }
+        },
+        // Build tasks
+        {
+            "label": "Build Tests (Debug)",
+            "type": "shell",
+            "options": {
+                "cwd": "${workspaceFolder}/build",
+            },
+            "group": "build",
+            "dependsOn": ["Run CMake (Debug)"],
+            "dependsOrder": "sequence",
+            "windows":{
+                "command": "MSBuild.exe",
+                "args": [
+                    "tests.vcxproj",
+                    "/m:4"
+                ]
+            }
+        },
+    ]
+}

@@ -1,0 +1,22 @@
+# Editor directories and file
+.ccls-cache
+.ccls
+.vs
+
+# Build directories
+bin
+build
+cmakebuild
+cmake-build-debug
+cmake-build-release
+cmake-build-debugwithrelinfo
+cmake-build-debug-mingw
+
+# Compiled shader_modules
+*.spv
+
+# Md file not added to git to write things to help think about the structure
+think-board.md
+
+# Misc
+*.log
