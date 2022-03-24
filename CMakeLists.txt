@@ -1,6 +1,6 @@
 # Config based on https://github.com/krux02/minimal_cmake_example
 
-cmake_minimum_required(VERSION 3.17)
+cmake_minimum_required(VERSION 3.21)
 project(railguard)
 
 ##################################################################
@@ -19,7 +19,10 @@ set(settings
 
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 20)
+
+# Enable tests
+enable_testing()
 
 ##################################################################
 ###                          SOURCES                           ###
@@ -33,16 +36,6 @@ set(railguard_lib_sources
 # Add header directories for main lib
 set(railguard_lib_header_dir
     include
-)
-
-# Add source files for tests
-set(test_sources
-    tests/main.cpp
-)
-
-# Add resource files for tests
-set(test_resources
-
 )
 
 ##################################################################
@@ -117,15 +110,69 @@ endif()
 ###                           TESTING                          ###
 ##################################################################
 
-# Create test executable
-add_executable (tests ${test_resources})
-target_sources (tests PRIVATE ${test_sources})
+# Macro inspired by https://bertvandenbroucke.netlify.app/2019/12/12/unit-testing-with-ctest/
 
-# Link original executable as lib
-target_link_libraries(tests PUBLIC railguard_lib)
+# Add a new unit test
+# A new target with the test sources is constructed, and a CTest test with the
+# same name is created. The new test is also added to the global list of test
+# contained in the check target
+macro(add_unit_test)
+    # Define macro arguments
+    set(options PARALLEL)
+    set(oneValueArgs FILE)
+    cmake_parse_arguments(TEST "${options}" "${oneValueArgs}" "" ${ARGN})
 
-# Definition to recognize tests from inside the code
-target_compile_definitions(tests PUBLIC UNIT_TESTS)
+    # Remove extension of TEST_FILE.
+    set(TEST_NAME ${TEST_FILE})
+    string(REGEX REPLACE ".cpp$" "" TEST_NAME ${TEST_NAME})
+    # Also replace \ by /
+    string(REGEX REPLACE "/" "-" TEST_NAME ${TEST_NAME})
+
+
+    # Compile test
+    message(STATUS "Generating test \"${TEST_NAME}\"")
+    add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE})
+    target_sources(${TEST_NAME} PRIVATE tests/${TEST_FILE})
+
+    # Set directory for executable
+    set_target_properties(${TEST_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+    )
+
+    # Link project lib and testing framework
+    target_link_libraries(${TEST_NAME} railguard_lib testing_framework)
+
+    # Register test
+    add_test(NAME ${TEST_NAME}
+             WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/tests
+             COMMAND ${TEST_NAME})
+
+    # Add test to list
+    set(TEST_NAMES ${TEST_NAMES} ${TEST_NAME})
+    set_tests_properties(${TEST_NAME} PROPERTIES
+        ENVIRONMENT "TEST_FILE=tests/${TEST_FILE};TEST_LINE=0"
+    )
+endmacro(add_unit_test)
+
+# Get all c++ files in the tests directory, recursively
+file(GLOB_RECURSE test_files
+        "tests/*.cpp"
+    )
+
+# For each one, add it
+foreach(test_file ${test_files})
+    # Get local path (remove prefix project source)
+    string(REGEX REPLACE "^${PROJECT_SOURCE_DIR}/tests/" "" test_file ${test_file})
+
+    add_unit_test(FILE ${test_file})
+endforeach(test_file)
+
+# Save target
+add_custom_target(
+    tests
+    DEPENDS ${TEST_NAMES}
+)
+
 
 ##################################################################
 ###                     SHADER COMPILATION                     ###

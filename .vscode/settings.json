@@ -1,22 +1,10 @@
 {
     // General editor config
     "files.associations": {
-        "*.h": "c++",
-        "*.c": "c"
+        "*.h": "cpp"
     },
-    // Linter config
-    "C_Cpp.default.configurationProvider": "numaru.vscode-cmake-lite",
-    "C_Cpp.default.defines": [
-        "RENDERER_VULKAN",
-        "WINDOW_SDL2",
-        "MEMORY_CHECKS",
-        "USE_VK_VALIDATION_LAYERS"
-    ],
-    "C_Cpp.default.includePath": [
-        "${workspaceFolder}/include",
-        "${workspaceFolder}/external/vma/include",
-        "${workspaceFolder}/external/volk",
-        "${VULKAN_SDK}/include",
-        "${SDL2_PATH}/include",
-    ],
+    // Test explorer
+    "cmakeExplorer.buildDir": "${workspaceFolder}/build",
+    "cmakeExplorer.buildConfig": "Debug",
+    "cmakeExplorer.suiteDelimiter": "-",
 }

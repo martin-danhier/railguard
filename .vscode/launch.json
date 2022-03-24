@@ -9,10 +9,11 @@
             "name": "Debug Tests (Windows)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/Debug/tests.exe",
+            "program": "${workspaceFolder}/build/tests/Debug/core-t1.exe",
             "console": "integratedTerminal",
             "preLaunchTask": "Build Tests (Debug)",
             "cwd": "${workspaceFolder}/build",
         },
+
     ]
 }

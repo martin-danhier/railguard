@@ -70,3 +70,14 @@ if (DEFINED RENDERER_VULKAN)
     target_include_directories(volk PUBLIC volk)
     target_link_libraries(volk PUBLIC Vulkan::Vulkan $<$<BOOL:UNIX>:${CMAKE_DL_LIBS}>)
 endif()
+
+##################################################################
+###                      TESTING FRAMEWORK                     ###
+##################################################################
+
+add_library(testing_framework STATIC)
+target_sources(testing_framework PRIVATE
+    testing_framework/test_framework.c
+    testing_framework/test_framework.h
+)
+target_include_directories(testing_framework PUBLIC testing_framework)
