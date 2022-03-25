@@ -1,0 +1,67 @@
+name: CMake
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+
+jobs:
+  build:
+    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+    # You can convert this to a matrix build if you need cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Init submodules
+      # You may pin to the exact commit or the version.
+      # uses: snickerbockers/submodules-init@74927a8bb0fe1bb0f1f1e4d102384a8e69f19171
+      uses: snickerbockers/submodules-init@v4
+      
+    - name: Setup environment for GUI testing
+      uses: lyricwulf/abc@v1
+      with:
+        linux: mesa-utils linux-generic xserver-xorg-core xserver-xorg xserver-xorg-video-all xserver-xorg-input-all libwayland-egl1-mesa
+
+    - name: Setup Vulkan SDK
+      # You may pin to the exact commit or the version.
+      # uses: humbletim/setup-vulkan-sdk@099bb52745ef25d99440fc15b6004582867d19c9
+      uses: humbletim/setup-vulkan-sdk@v1.0.3
+
+    - name: Setup glslangValidator
+      working-directory: ${{github.workspace}}
+      run: |
+        mkdir glslangValidator
+        cd glslangValidator
+        wget https://github.com/KhronosGroup/glslang/releases/download/master-tot/glslang-master-linux-Release.zip
+        unzip ./glslang-master-linux-Release.zip -d .
+        rm ./glslang-master-linux-Release.zip
+      
+    - name: Setup SDL2
+      # You may pin to the exact commit or the version.
+      # uses: lyricwulf/abc@66857ee5082bf5a43e736fd9c54c2e545d64e7ea
+      uses: lyricwulf/abc@v1
+      with:
+        linux: libsdl2-dev
+        
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+    - name: Build
+      # Build your program with the given configuration
+      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
+
+    - name: Test
+      working-directory: ${{github.workspace}}/build
+      # Execute tests defined by the CMake configuration.  
+      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
+      run: ctest -C ${{env.BUILD_TYPE}}
+      
