@@ -7,9 +7,9 @@
         // Windows
         {
             "name": "Debug Tests (Windows)",
-            "type": "cppvsdbg",
+            "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/tests/Debug/core-t1.exe",
+            "program": "${workspaceFolder}/build/tests/Debug/utils-vector.exe",
             "console": "integratedTerminal",
             "preLaunchTask": "Build Tests (Debug)",
             "cwd": "${workspaceFolder}/build",

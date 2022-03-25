@@ -20,6 +20,7 @@
             "cppStandard": "c++20",
             "intelliSenseMode": "windows-msvc-x64",
             "configurationProvider": "numaru.vscode-cmake-lite"
+            
         }
     ],
     "version": 4

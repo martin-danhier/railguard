@@ -11,6 +11,7 @@ cmake-build-debug
 cmake-build-release
 cmake-build-debugwithrelinfo
 cmake-build-debug-mingw
+cmake-build-debug-visual-studio
 
 # Compiled shader_modules
 *.spv
@@ -20,3 +21,4 @@ think-board.md
 
 # Misc
 *.log
+debug_print

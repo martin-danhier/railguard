@@ -1,6 +1,6 @@
 # Config based on https://github.com/krux02/minimal_cmake_example
 
-cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.20)
 project(railguard)
 
 ##################################################################
@@ -31,6 +31,10 @@ enable_testing()
 # Add source files for main lib
 set(railguard_lib_sources
     src/core/engine.cpp
+    src/core/window/window_sdl2.cpp
+    src/utils/vector_impl.cpp
+    include/railguard/utils/array.h
+    include/railguard/utils/vector.h
 )
 
 # Add header directories for main lib
@@ -57,11 +61,13 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "Release")
 endif ()
 
 # Add dependencies flags
-add_compile_definitions(${settings})
+foreach(flag ${settings})
+    add_compile_definitions(${flag})
+    set(${flag} "true")
+endforeach()
 
 # Vulkan specific
-if (RENDERER_VULKAN IN_LIST settings)
-
+if (DEFINED RENDERER_VULKAN)
     add_compile_definitions(VK_NO_PROTOTYPE)
 
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
