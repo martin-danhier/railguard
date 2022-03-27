@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  0)
-set(enable_ubsan 0)
+set(enable_asan  1)
+set(enable_ubsan 1)
 
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
@@ -37,9 +37,11 @@ set(railguard_lib_sources
     src/core/engine.cpp
     src/core/window/window_sdl2.cpp
     src/utils/vector_impl.cpp
+        src/utils/hash_map.cpp
     include/railguard/utils/array.h
     include/railguard/utils/vector.h
-)
+    include/railguard/utils/optional.h
+        )
 
 # Add header directories for main lib
 set(railguard_lib_header_dir

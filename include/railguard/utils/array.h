@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 namespace rg
 {
     /** Simple array of dynamic size. */

@@ -1,6 +1,6 @@
-#include "railguard/utils/vector.h"
+#include <railguard/utils/vector.h>
 
-#include "test_framework.h"
+#include "test_framework/test_framework.h"
 
 int call_count[2] = {0, 0};
 
@@ -65,7 +65,6 @@ TEST
     EXPECT_TRUE(v.is_empty());
     // The destructor should have been called again
     EXPECT_TRUE(call_count[0] == 2);
-
 
     // Test if the resize works
 

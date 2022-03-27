@@ -195,7 +195,7 @@ namespace rg
             using iterator_category = std::bidirectional_iterator_tag;
 
             iterator(Vector &vec, size_t startIndex): m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl) {
-                if (m_impl->is_valid() && m_index >= 0 && m_index < m_impl->size())
+                if (m_impl->is_valid() && m_index < m_impl->size())
                 {
                     m_ptr = static_cast<T*>(m_impl->get_element(m_index));
                 }
@@ -234,7 +234,7 @@ namespace rg
                 if (m_ptr != nullptr)
                 {
                     m_index--;
-                    if (m_index >= 0)
+                    if (m_index > 0)
                     {
                         m_ptr--;
                     }
@@ -265,12 +265,6 @@ namespace rg
         }
         iterator end()
         {
-            // Avoid underflow if the size is 0
-            if (m_impl.size() == 0)
-            {
-                return iterator(*this, 0);
-            }
-
             return iterator(*this, m_impl.size());
         }
 

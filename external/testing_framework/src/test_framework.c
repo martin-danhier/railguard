@@ -3,7 +3,7 @@
  * @author Martin Danhier
  */
 
-#include "test_framework.h"
+#include "test_framework/test_framework.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,7 +30,7 @@ WORD   TF_DEFAULT_COLOR_ATTRIBUTE = 0;
     do                                                                            \
     {                                                                             \
         TF_CONSOLE_HANDLE                      = GetStdHandle(STD_OUTPUT_HANDLE); \
-        CONSOLE_SCREEN_BUFFER_INFO consoleInfo = {0};                              \
+        CONSOLE_SCREEN_BUFFER_INFO consoleInfo = {0};                             \
         GetConsoleScreenBufferInfo(TF_CONSOLE_HANDLE, &consoleInfo);              \
         TF_DEFAULT_COLOR_ATTRIBUTE = consoleInfo.wAttributes;                     \
     } while (0)
@@ -67,7 +67,7 @@ typedef struct tf_error
 {
     tf_error_severity severity;
     size_t            line_number;
-    const char       *message;
+    tf_message        message;
     const char       *file;
 } tf_error;
 
@@ -213,17 +213,53 @@ tf_context *tf_create_context(void)
 
 void tf_delete_context(tf_context *context)
 {
-    if (context == NULL) {
+    if (context == NULL)
+    {
         return;
+    }
+
+    // Free dynamic messages
+    tf_linked_list_it it = tf_linked_list_iterator(&context->errors);
+    while (tf_linked_list_next(&it))
+    {
+        tf_error *error = it.value;
+
+        // Free message
+        if (error->message.message_is_dynamic)
+        {
+            free(error->message.message);
+        }
     }
 
     tf_linked_list_clear(&context->errors);
     free(context);
 }
 
+// Helper
+
+tf_message tf_const_msg(const char *message)
+{
+    return (tf_message) {
+        .message_is_dynamic = false,
+        .message            = message,
+    };
+}
+
+tf_message tf_dynamic_msg(const char *message)
+{
+    // Creates a message that is dynamically allocated.
+    char *message_alloc = malloc(strlen(message) + 1);
+    strcpy(message_alloc, message);
+
+    return (tf_message) {
+        .message_is_dynamic = true,
+        .message            = message_alloc,
+    };
+}
+
 // Asserts
 
-bool tf_assert_common(tf_context *context, size_t line_number, const char *file, bool condition, const char *message, bool recoverable)
+bool tf_assert_common(tf_context *context, size_t line_number, const char *file, bool condition, tf_message message, bool recoverable)
 {
     if (condition != true)
     {
@@ -248,8 +284,9 @@ bool tf_assert_true(tf_context *context, size_t line_number, const char *file, b
                             line_number,
                             file,
                             condition,
-                            recoverable ? "Condition failed. Expected [true], got [false]."
-                                        : "Assertion failed. Expected [true], got [false]. Unable to continue execution.",
+                            recoverable
+                                ? tf_const_msg("Condition failed. Expected [true], got [false].")
+                                : tf_const_msg("Assertion failed. Expected [true], got [false]. Unable to continue execution."),
                             recoverable);
 }
 
@@ -259,8 +296,9 @@ bool tf_assert_false(tf_context *context, size_t line_number, const char *file, 
                             line_number,
                             file,
                             !condition,
-                            recoverable ? "Condition failed. Expected [true], got [false]."
-                                        : "Assertion failed. Expected [true], got [false]. Unable to continue execution.",
+                            recoverable
+                                ? tf_const_msg("Condition failed. Expected [true], got [false].")
+                                : tf_const_msg("Assertion failed. Expected [true], got [false]. Unable to continue execution."),
                             recoverable);
 }
 
@@ -270,8 +308,9 @@ bool tf_assert_not_null(tf_context *context, size_t line_number, const char *fil
                             line_number,
                             file,
                             pointer != NULL,
-                            recoverable ? "Condition failed. Got [NULL], expected something else."
-                                        : "Assertion failed. Got [NULL], expected something else. Unable to continue execution.",
+                            recoverable
+                                ? tf_const_msg("Condition failed. Got [NULL], expected something else.")
+                                : tf_const_msg("Assertion failed. Got [NULL], expected something else. Unable to continue execution."),
                             recoverable);
 }
 
@@ -281,8 +320,9 @@ bool tf_assert_null(tf_context *context, size_t line_number, const char *file, v
                             line_number,
                             file,
                             pointer == NULL,
-                            recoverable ? "Condition failed. Got [NULL], expected something else."
-                                        : "Assertion failed. Got [NULL], expected something else. Unable to continue execution.",
+                            recoverable
+                                ? tf_const_msg("Condition failed. Got [NULL], expected something else.")
+                                : tf_const_msg("Assertion failed. Got [NULL], expected something else. Unable to continue execution."),
                             recoverable);
 }
 
@@ -329,10 +369,10 @@ bool tf_run_test(tf_test_function pfn_test)
                 TF_FORMAT_RED;
                 printf("Error");
                 break;
-                case TF_WARNING:
-                    TF_FORMAT_YELLOW;
-                    printf("Warning");
-                    break;
+            case TF_WARNING:
+                TF_FORMAT_YELLOW;
+                printf("Warning");
+                break;
         }
         TF_FORMAT_RESET;
 
@@ -347,7 +387,8 @@ bool tf_run_test(tf_test_function pfn_test)
     return success;
 }
 
-int tf_main(tf_test_function pfn_test) {
+int tf_main(tf_test_function pfn_test)
+{
     TF_INIT_FORMATTING;
 
     bool result = tf_run_test(pfn_test);

@@ -60,11 +60,23 @@ extern "C"
 
     typedef struct tf_context tf_context;
 
+    typedef struct tf_message
+    {
+        const char *message;
+        bool  message_is_dynamic;
+    } tf_message;
+
     typedef void (*tf_test_function)(tf_context *);
 
     // --- Functions ---
 
     int tf_main(tf_test_function pfn_test);
+
+    tf_message tf_const_msg(const char *message);
+
+    tf_message tf_dynamic_msg(const char *message);
+
+    bool tf_assert_common(tf_context *context, size_t line_number, const char *file, bool condition, tf_message message, bool recoverable);
 
     bool tf_assert_true(tf_context *context, size_t line_number, const char *file, bool condition, bool recoverable);
 
