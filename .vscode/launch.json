@@ -4,16 +4,59 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-        // Windows
         {
-            "name": "Debug Tests (Windows)",
-            "type": "lldb",
+            "type": "gdb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/tests/Debug/utils-vector.exe",
-            "console": "integratedTerminal",
+            "name": "Debug Tests",
+            "target": "./tests/utils-vector",
+            "cwd": "${workspaceRoot}/build",
+            "valuesFormatting": "prettyPrinters",
             "preLaunchTask": "Build Tests (Debug)",
-            "cwd": "${workspaceFolder}/build",
+            "debugger_args": [
+                "-x",
+                "${workspaceFolder}/gdb_formatter.py",
+                "-ex",
+                "set debuginfod enabled off",
+                "-ex",
+                "set mi-async"
+            ]
         },
-
+        // {
+        //     "name": "Debug Tests",
+        //     "type": "cppdbg",
+        //     "request": "launch",
+        //     "externalConsole": false,
+        //     "stopAtEntry": false,
+        //     "preLaunchTask": "Build Tests (Debug)",
+        //     "program": "${workspaceFolder}/build/tests/utils-vector",
+        //     "cwd": "${workspaceFolder}/build",
+        //     "windows": {
+        //         "type": "cppvsdbg",
+        //         "program": "${workspaceFolder}/build/tests/Debug/utils-vector.exe",
+        //     },
+        //     "linux": {
+        //         "MIMode": "gdb",
+        //         "setupCommands": [
+        //             {
+        //                 "description": "Enable pretty-printing for gdb",
+        //                 "text": "-enable-pretty-printing"
+        //             },
+        //             {
+        //                 "description": "Set Disassembly Flavor to Intel",
+        //                 "text": "-gdb-set disassembly-flavor intel",
+        //                 "ignoreFailures": true
+        //             },
+        //             {
+        //                 "description": "Disable debuginfod",
+        //                 "text": "set debuginfod enabled off",
+        //                 "ignoreFailures": true
+        //             },
+        //             {
+        //                 "description": "Load pretty printers",
+        //                 "text": "source ${workspaceFolder}/gdb_formatter.py"
+        //             }
+        //         ]
+        //     }
+        // },
     ]
 }

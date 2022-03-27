@@ -16,6 +16,9 @@ class VectorPrinter:
         def __iter__(self):
             return self
 
+        def __next__(self):
+            return self.next()
+
         def next(self):
             if self.i == self.count:
                 raise StopIteration
@@ -57,4 +60,5 @@ def build_pretty_printer():
     pp.add_printer('Vector', '^rg::Vector<.*>$', VectorPrinter)
     return pp
 
+print("Registering pretty printers for railguard")
 printing.register_pretty_printer(None, build_pretty_printer())
