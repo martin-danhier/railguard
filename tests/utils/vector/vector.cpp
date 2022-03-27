@@ -1,7 +1,6 @@
-#include <railguard/utils/vector.h>
+#include "railguard/utils/vector.h"
 
-#include <iostream>
-#include <test_framework.h>
+#include "test_framework.h"
 
 int call_count[2] = {0, 0};
 
@@ -118,4 +117,11 @@ TEST
         EXPECT_TRUE(v[i].get_value() == i);
     }
 
+    // And it also works with iterator
+    size_t i = 0;
+    for (auto &value : v)
+    {
+        EXPECT_TRUE(value.get_value() == i++);
+    }
+    EXPECT_TRUE(i == v.size());
 }

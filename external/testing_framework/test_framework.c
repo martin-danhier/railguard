@@ -336,7 +336,7 @@ bool tf_run_test(tf_test_function pfn_test)
         }
         TF_FORMAT_RESET;
 
-        printf("] %s:%llu\n    %s\n", current_error->file, current_error->line_number, current_error->message);
+        printf("] %s:%zu\n    %s\n", current_error->file, current_error->line_number, current_error->message);
     }
 
     printf("\n");

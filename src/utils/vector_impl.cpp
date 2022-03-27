@@ -11,20 +11,32 @@ VectorImpl::VectorImpl(size_t initial_capacity, size_t element_size)
     : m_capacity(initial_capacity),
       m_element_size(element_size),
       m_count(0),
-      m_data(new char[m_capacity * m_element_size]),
       m_growth_amount(1)
 {
+    // Prevent zero-sized vectors
+    if (m_capacity == 0)
+        m_capacity = 1;
+
+    m_data = new char[m_capacity * m_element_size];
 }
 
 VectorImpl::VectorImpl(const VectorImpl &other)
     : m_capacity(other.m_capacity),
       m_element_size(other.m_element_size),
       m_count(other.m_count),
-      m_data(new char[m_capacity * m_element_size]),
+      m_data(nullptr),
       m_growth_amount(other.m_growth_amount)
 {
     // Copy contents
-    memcpy(m_data, other.m_data, m_count * m_element_size);
+    if (other.is_valid())
+    {
+        m_data = new char[m_capacity * m_element_size];
+        memcpy(m_data, other.m_data, m_count * m_element_size);
+    }
+    else
+    {
+        throw std::runtime_error("Attempted to copy an invalid vector");
+    }
 }
 
 VectorImpl::VectorImpl(VectorImpl &&other) noexcept
@@ -45,14 +57,20 @@ VectorImpl &VectorImpl::operator=(const VectorImpl &other)
     if (this == &other)
         return *this;
 
+    // Error if the other is invalid
+    if (!other.is_valid())
+    {
+        throw std::runtime_error("Attempted to copy an invalid vector");
+    }
+
     // Free old data
     delete[] m_data;
 
     // Copy new data
-    m_capacity = other.m_capacity;
+    m_capacity     = other.m_capacity;
     m_element_size = other.m_element_size;
-    m_count = other.m_count;
-    m_data = new char[m_capacity * m_element_size];
+    m_count        = other.m_count;
+    m_data         = new char[m_capacity * m_element_size];
     memcpy(m_data, other.m_data, m_count * m_element_size);
     m_growth_amount = other.m_growth_amount;
 
@@ -70,16 +88,15 @@ VectorImpl &VectorImpl::operator=(VectorImpl &&other) noexcept
 
     // Take the other's data without copying
     // To prevent the other from freeing it, we set it to nullptr
-    m_capacity = other.m_capacity;
-    m_element_size = other.m_element_size;
-    m_count = other.m_count;
-    m_data = other.m_data;
+    m_capacity      = other.m_capacity;
+    m_element_size  = other.m_element_size;
+    m_count         = other.m_count;
+    m_data          = other.m_data;
     m_growth_amount = other.m_growth_amount;
-    other.m_data = nullptr;
+    other.m_data    = nullptr;
 
     return *this;
 }
-
 
 VectorImpl::~VectorImpl()
 {
@@ -120,7 +137,6 @@ void VectorImpl::ensure_capacity(size_t required_minimum_capacity)
     }
 }
 
-
 void *VectorImpl::push_slot()
 {
     // Make sure that there is enough room in the allocation for this new p_data
@@ -143,7 +159,8 @@ void *VectorImpl::last_element() const
     return m_data + ((m_count - 1) * m_element_size);
 }
 
-void *VectorImpl::get_element(size_t pos) const {
+void *VectorImpl::get_element(size_t pos) const
+{
     if (pos < m_count)
     {
         return ((char *) m_data) + (pos * m_element_size);

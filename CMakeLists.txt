@@ -17,6 +17,10 @@ set(settings
     RENDERER_VULKAN
 )
 
+# Enable/disable sanitizers
+set(enable_asan  0)
+set(enable_ubsan 0)
+
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 20)
@@ -75,6 +79,17 @@ if (DEFINED RENDERER_VULKAN)
             USE_VK_VALIDATION_LAYERS
         )
     endif()
+endif()
+
+# Enable sanitizers if variable is 1
+if (${enable_asan} STREQUAL "1")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+endif()
+
+if (${enable_ubsan} STREQUAL "1")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
 endif()
 
 ##################################################################
