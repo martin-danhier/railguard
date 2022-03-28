@@ -8,5 +8,5 @@
     "cmakeExplorer.buildConfig": "Debug",
     "cmakeExplorer.suiteDelimiter": "-",
     // Debugger
-    "lldb.launch.initCommands": ["command script import formatters/lldb_formatter.py"]
+    "lldb.launch.initCommands": ["command script import formatters/lldb_formatter.py"], 
 }

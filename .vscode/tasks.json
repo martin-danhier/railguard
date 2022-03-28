@@ -11,11 +11,20 @@
             "options": {
                 "cwd": "${workspaceFolder}"
             },
-            "args": [
-                ".",
-                "-Bbuild",
-                "-DCMAKE_BUILD_TYPE=Debug"
-            ],
+            "windows": {
+                "args": [
+                    ".",
+                    "-Bbuild",
+                    "-DCMAKE_BUILD_TYPE=Debug"
+                ],
+            },
+            "linux": {
+                "args": [
+                    ".",
+                    "-Bbuild",
+                    "-DCMAKE_BUILD_TYPE=Debug"
+                ],
+            },
         },
         {
             "label": "Run CMake (Release)",
@@ -32,15 +41,20 @@
                     "-G",
                     "NMake Makefiles"
                 ]
-            }
+            },
+            "linux": {
+                "command": "cmake",
+                "args": [
+                    ".",
+                    "-Bbuild",
+                    "-DCMAKE_BUILD_TYPE=Release"
+                ]
+            },
         },
         // Build tasks
         {
             "label": "Build Tests (Debug)",
             "type": "shell",
-            "options": {
-                "cwd": "${workspaceFolder}/build",
-            },
             "group": "build",
             "dependsOn": ["Run CMake (Debug)"],
             "dependsOrder": "sequence",
@@ -49,7 +63,19 @@
                 "args": [
                     "tests.vcxproj",
                     "/m:4"
-                ]
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}/build",
+                }
+            },
+            "linux": {
+                "command": "make",
+                "args": [
+                    "tests"
+                ],
+                "options": {
+                    "cwd": "${workspaceFolder}/build"
+                }
             }
         },
     ]

@@ -40,6 +40,7 @@ namespace rg::_impl
         VectorImpl &operator=(const VectorImpl &other);
         VectorImpl &operator=(VectorImpl &&other) noexcept;
 
+
         void  ensure_capacity(size_t required_minimum_capacity);
         void *push_slot();
         /**
@@ -62,6 +63,11 @@ namespace rg::_impl
             return m_count == 0;
         }
 
+        [[nodiscard]] inline bool is_valid() const
+        {
+            return m_data != nullptr;
+        }
+
         [[nodiscard]] inline size_t size() const
         {
             return m_count;
@@ -74,9 +80,7 @@ namespace rg::_impl
 
         [[nodiscard]] void *get_element(size_t index) const;
 
-        bool  copy(size_t src_pos, size_t dst_pos);
-
-        inline void  clear() {
+        inline void clear() {
             m_count = 0;
         }
     };

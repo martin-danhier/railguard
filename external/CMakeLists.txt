@@ -77,7 +77,9 @@ endif()
 
 add_library(testing_framework STATIC)
 target_sources(testing_framework PRIVATE
-    testing_framework/test_framework.c
-    testing_framework/test_framework.h
+        testing_framework/test_framework/test_framework.hpp
+        testing_framework/src/test_framework.cpp
+        testing_framework/test_framework/test_framework.h
+        testing_framework/src/test_framework.c
 )
 target_include_directories(testing_framework PUBLIC testing_framework)

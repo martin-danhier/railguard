@@ -1,7 +1,7 @@
 #include <railguard/core/window.h>
 #include <railguard/utils/vector.h>
 
-#include <test_framework.h>
+#include "test_framework/test_framework.h"
 
 TEST
 {
