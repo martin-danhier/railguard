@@ -14,12 +14,8 @@
 // If WIN32 or _WIN32 or WIN64 or _WIN64 is defined, we are on a Windows platform.
 #if WIN32 || _WIN32 || WIN64 || _WIN64
 #include <windows.h>
-#endif
-
-// Macros
 
 // On Windows, without Windows Terminal, ANSI color codes are not supported
-#if WIN32 || _WIN32 || WIN64 || _WIN64
 
 // On Windows, we need to store the previous color in order to reset it
 HANDLE TF_CONSOLE_HANDLE          = 0;
@@ -227,7 +223,8 @@ void tf_delete_context(tf_context *context)
         // Free message
         if (error->message.message_is_dynamic)
         {
-            free(error->message.message);
+            free((void*) error->message.message);
+            error->message.message = NULL;
         }
     }
 
@@ -376,7 +373,7 @@ bool tf_run_test(tf_test_function pfn_test)
         }
         TF_FORMAT_RESET;
 
-        printf("] %s:%zu\n    %s\n", current_error->file, current_error->line_number, current_error->message);
+        printf("] %s:%zu\n    %s\n", current_error->file, current_error->line_number, current_error->message.message);
     }
 
     printf("\n");

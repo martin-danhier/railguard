@@ -12,6 +12,7 @@ cmake-build-release
 cmake-build-debugwithrelinfo
 cmake-build-debug-mingw
 cmake-build-debug-visual-studio
+cmake-build-debug-coverage
 
 # Compiled shader_modules
 *.spv

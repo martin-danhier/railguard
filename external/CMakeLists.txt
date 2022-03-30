@@ -49,6 +49,8 @@ if(DEFINED WINDOW_SDL2)
     add_library(sdl2 INTERFACE)
     target_include_directories(sdl2 INTERFACE ${sdl_include_dir})
     target_link_directories(sdl2 INTERFACE ${sdl_lib_dir})
+    # Add inside of SDL2 directory to fix "begin_code.h" not found
+    target_include_directories(sdl2 INTERFACE "${sdl_include_dir}/SDL2")
 
     target_link_libraries(sdl2 INTERFACE SDL2)
     if (WIN32)

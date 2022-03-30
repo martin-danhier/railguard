@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <memory>
 #include "test_framework.h"
 
 // Macros
@@ -35,7 +36,6 @@ bool tf_assert_equal(tf_context *context, size_t line_number, const char *file, 
 {
     if (actual != expected)
     {
-        // Same in C++
         std::string s = recoverable ? "Condition" : "Assertion";
         s += " failed. Expected: ";
         s += std::to_string(expected);

@@ -1,6 +1,6 @@
 # Config based on https://github.com/krux02/minimal_cmake_example
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 project(railguard)
 
 ##################################################################
@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  1)
-set(enable_ubsan 1)
+set(enable_asan  0)
+set(enable_ubsan 0)
 
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
@@ -79,6 +79,16 @@ if (DEFINED RENDERER_VULKAN)
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_definitions(
             USE_VK_VALIDATION_LAYERS
+        )
+    endif()
+endif()
+
+# On windows: enable debug symbols for clang
+if (WIN32)
+    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        add_compile_options(
+            -g
+            -
         )
     endif()
 endif()
