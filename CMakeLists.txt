@@ -37,11 +37,13 @@ set(railguard_lib_sources
     src/core/engine.cpp
     src/core/window/window_sdl2.cpp
     src/utils/vector_impl.cpp
-        src/utils/hash_map.cpp
+    src/utils/hash_map.cpp
     include/railguard/utils/array.h
+    include/railguard/utils/map.h
     include/railguard/utils/vector.h
     include/railguard/utils/optional.h
-        )
+    include/railguard/utils/storage.h
+)
 
 # Add header directories for main lib
 set(railguard_lib_header_dir

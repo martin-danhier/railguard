@@ -110,12 +110,86 @@ class HashMapPrinter:
     def display_hint(self):
         return 'array'
 
+# ====== rg::Map<T> ======
+
+class MapPrinter:
+    """Prints a rg::Map<T>"""
+
+    class _iterator:
+        def __init__(self, storage: VectorPrinter):
+            self.storage_it = storage.children()
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return self.next()
+
+        def next(self):
+            _, entry = next(self.storage_it)
+
+            return str(entry["m_key"]), entry["m_value"]
+
+
+    def __init__(self, val):
+        # Get template parameters
+        self.value_type = val.type.template_argument(0)
+
+        # Get vector
+        self.storage = VectorPrinter(val['m_storage'])
+
+        # Get hash map
+        map = val['m_hash_map']
+        # Get capacity and count
+        self.capacity = map['m_data']['capacity']
+        self.count    = map['m_data']['count']
+
+    def to_string(self):
+        return 'Map<%s>(capacity=%d, count=%d)' % (self.value_type, self.capacity, self.count)
+
+    def children(self):
+        return self._iterator(self.storage)
+
+    def display_hint(self):
+        return 'array'
+
+# ====== Storage<T> ======
+
+class StoragePrinter:
+    """Prints a rg::Storage<T>"""
+
+    def __init__(self, val):
+        # Get template parameters
+        self.value_type = val.type.template_argument(0)
+
+        # Get counter
+        self.counter = val['m_id_counter']
+
+        # Get map
+        self.map = val['m_map']
+        self.map_printer = MapPrinter(self.map)
+
+        # Get count
+        self.count = self.map['m_hash_map']['m_data']['count']
+
+    def to_string(self):
+        return 'Storage<%s>(count=%d, id_counter=%d)' % (self.value_type, self.count, self.counter)
+
+    def children(self):
+        return self.map_printer.children()
+
+    def display_hint(self):
+        return 'array'
+
+
 # ====== Register printers ======
 
 def build_pretty_printer():
     pp = printing.RegexpCollectionPrettyPrinter("rg")
     pp.add_printer('Vector', '^rg::Vector<.*>$', VectorPrinter)
     pp.add_printer('HashMap', '^rg::HashMap$', HashMapPrinter)
+    pp.add_printer('Map', '^rg::Map<.*>$', MapPrinter)
+    pp.add_printer('Storage', '^rg::Storage<.*>$', StoragePrinter)
     return pp
 
 

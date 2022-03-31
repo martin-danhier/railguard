@@ -1,0 +1,79 @@
+#include <railguard/utils/storage.h>
+
+#include <test_framework/test_framework.hpp>
+
+struct Data
+{
+    int a = 0;
+    int b = 0;
+};
+
+TEST
+{
+    rg::Storage<Data> storage;
+
+    // Should be empty
+    EXPECT_TRUE(storage.is_empty());
+    EXPECT_EQ(storage.count(), 0ul);
+
+    // Push some data
+    auto i1 = storage.push(Data {1, 2});
+    EXPECT_EQ(i1, 1ul);
+    auto i2 = storage.push(Data {3, 4});
+    EXPECT_EQ(i2, 2ul);
+    auto i3 = storage.push(Data {5, 6});
+    EXPECT_EQ(i3, 3ul);
+
+    // Should have 3 items
+    EXPECT_FALSE(storage.is_empty());
+    EXPECT_EQ(storage.count(), 3ul);
+
+    // Should be able to get the data
+    auto v1 = storage.get(i1);
+    ASSERT_TRUE(v1.has_value());
+    EXPECT_EQ(v1->a, 1);
+    EXPECT_EQ(v1->b, 2);
+
+    auto v2 = storage.get(i2);
+    ASSERT_TRUE(v2.has_value());
+    EXPECT_EQ(v2->a, 3);
+    EXPECT_EQ(v2->b, 4);
+
+    auto v3 = storage.get(i3);
+    ASSERT_TRUE(v3.has_value());
+    EXPECT_EQ(v3->a, 5);
+    EXPECT_EQ(v3->b, 6);
+
+    // Also works with operators
+    EXPECT_EQ(storage[i1].a, 1);
+    EXPECT_EQ(storage[i1].b, 2);
+    EXPECT_EQ(storage[i2].a, 3);
+    EXPECT_EQ(storage[i2].b, 4);
+    EXPECT_EQ(storage[i3].a, 5);
+    EXPECT_EQ(storage[i3].b, 6);
+
+    // With operators, we can modify a value in place
+    storage[i1].a = 7;
+    storage[i1].b = 8;
+    EXPECT_EQ(storage[i1].a, 7);
+    EXPECT_EQ(storage[i1].b, 8);
+
+    // But we can't access an invalid index
+    EXPECT_FALSE(storage.get(999).has_value());
+    EXPECT_THROWS(storage[999]);
+
+    // We can iterate
+    for (auto &v : storage)
+    {
+        auto  id = v.key();
+        auto &val = v.value();
+
+        EXPECT_TRUE(id >= 1 && id <= 3);
+        val.a += 1;
+    }
+
+    EXPECT_EQ(storage[i1].a, 8);
+    EXPECT_EQ(storage[i2].a, 4);
+    EXPECT_EQ(storage[i3].a, 6);
+
+}

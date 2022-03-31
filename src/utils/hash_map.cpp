@@ -360,6 +360,18 @@ namespace rg
         return m_data->count;
     }
 
+    bool HashMap::is_empty() const
+    {
+        return m_data->count == 0;
+    }
+
+    bool HashMap::exists(const Key &key) const
+    {
+        // Get the key
+        auto res = get(key);
+        return res.has_value();
+    }
+
     // Iterator
 
     HashMap::Iterator::Iterator(const HashMap *map, size_t index)

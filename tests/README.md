@@ -37,8 +37,8 @@ CMake will automatically find the new test.
 Note: the `TEST` macro wraps the `main` function, thus only one test is allow per file.
 
 Inside a test, you can use various macros. They exist in two categories:
-- **Assertions**: check if a condition is true. If it is false, do not continue the execution.
-- **Expectations**: check if a condition is true. If it is false, continue the execution.
+- **Assertions**: check if a condition is true. If m_it is false, do not continue the execution.
+- **Expectations**: check if a condition is true. If m_it is false, continue the execution.
 
 Typically, use expectations everywhere, except if a false condition could imply segmentation faults later.
 For example, if a pointer is followed in the test, assert that the pointer is not null beforehand.

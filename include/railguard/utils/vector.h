@@ -184,17 +184,17 @@ namespace rg
           private:
             T* m_ptr;
             size_t m_index;
-            _impl::VectorImpl *m_impl;
+            const _impl::VectorImpl *m_impl;
           public:
 
             // Traits
             using difference_type = ptrdiff_t;
             using value_type = T;
-            using pointer = T *;
-            using reference = T &;
+            using pointer = value_type *;
+            using reference = value_type &;
             using iterator_category = std::bidirectional_iterator_tag;
 
-            iterator(Vector &vec, size_t startIndex): m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl) {
+            iterator(const Vector &vec, size_t startIndex): m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl) {
                 if (m_impl->is_valid() && m_index < m_impl->size())
                 {
                     m_ptr = static_cast<T*>(m_impl->get_element(m_index));
@@ -259,11 +259,12 @@ namespace rg
 
         };
 
-        iterator begin()
+        iterator begin() const
         {
             return iterator(*this, 0);
         }
-        iterator end()
+
+        iterator end() const
         {
             return iterator(*this, m_impl.size());
         }
@@ -280,6 +281,33 @@ namespace rg
 
             // Clear the vector
             m_impl.clear();
+        }
+
+        // Erase
+
+        void remove_at(size_t index) {
+            if (index > size())
+            {
+                // The index is not in the vector, so it is already erased, in a way
+                return;
+            }
+            else if (index == size() - 1)
+            {
+                // The last element is erased, so we can just pop_back
+                pop_back();
+            }
+            else
+            {
+                // The element is not the last one, so we need to move the last element to the index and pop_back
+                T& elem = *static_cast<T *>(m_impl.get_element(index));
+                T& last_elem = *static_cast<T *>(m_impl.get_element(size() - 1));
+
+                // We will destroy the last element, so we can move it
+                elem = std::move(last_elem);
+
+                // We can now pop_back
+                pop_back();
+            }
         }
     };
 

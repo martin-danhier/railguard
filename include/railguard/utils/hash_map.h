@@ -61,8 +61,10 @@ namespace rg
         [[nodiscard]] Optional<Value *> get(const Key &key) const;
         void                            set(const Key &key, const Value &value);
         void                            remove(const Key &key);
+        bool exists(const Key &key) const;
         void                            clear();
-        size_t                          count() const;
+        [[nodiscard]] size_t                          count() const;
+        [[nodiscard]] bool is_empty() const;
 
         // Iterator
         class Iterator

@@ -80,9 +80,11 @@ namespace rg::_impl
 
         [[nodiscard]] void *get_element(size_t index) const;
 
-        inline void clear() {
+        inline void clear()
+        {
             m_count = 0;
         }
+
     };
 
 } // namespace rg::_impl

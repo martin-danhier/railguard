@@ -61,6 +61,56 @@ namespace rg
             m_has_value = false;
             return std::move(m_value);
         }
+
+        T &expect(const std::string &msg)
+        {
+            if (!m_has_value)
+            {
+                throw std::runtime_error(msg);
+            }
+            return m_value;
+        }
+
+        T& operator*()
+        {
+            return value();
+        }
+
+        const T& operator*() const
+        {
+            return value();
+        }
+
+        T* operator->()
+        {
+            return &value();
+        }
+
+        const T* operator->() const
+        {
+            return &value();
+        }
+    };
+
+    /** Optional variant that doesn't hold the data itself, but a pointer to it. */
+    template<typename T> class OptionalPtr {
+      private:
+        Optional<T*> m_optional;
+      public:
+        OptionalPtr() = default;
+        explicit OptionalPtr(T &value) : m_optional(&value) {}
+        OptionalPtr(const OptionalPtr&) = default;
+        OptionalPtr(OptionalPtr&&)  noexcept = default;
+        OptionalPtr& operator=(const OptionalPtr&) = default;
+        OptionalPtr& operator=(OptionalPtr&&)  noexcept = default;
+        ~OptionalPtr() = default;
+        [[nodiscard]] bool has_value() const { return m_optional.has_value(); }
+        T &value() const { return *m_optional.value(); }
+        T &expect(const std::string &msg) { return *m_optional.expect(msg); }
+        T *operator->() { return m_optional.value(); }
+        const T *operator->() const { return m_optional.value(); }
+        T &operator*() { return *m_optional.value(); }
+        const T &operator*() const { return *m_optional.value(); }
     };
 
     // Some functions to have an easier time creating optional values
