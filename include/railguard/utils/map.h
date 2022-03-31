@@ -119,7 +119,7 @@ namespace rg
 
             if (res.has_value())
             {
-                m_storage[res.value()->as_size].data = value;
+                m_storage[res.value()->as_size].m_data = value;
             }
             else
             {

@@ -14,19 +14,19 @@ TEST
 
     // Should be empty
     EXPECT_TRUE(storage.is_empty());
-    EXPECT_EQ(storage.count(), 0ul);
+    EXPECT_EQ(storage.count(), static_cast<size_t>(0));
 
     // Push some data
     auto i1 = storage.push(Data {1, 2});
-    EXPECT_EQ(i1, 1ul);
+    EXPECT_EQ(i1, static_cast<size_t>(1));
     auto i2 = storage.push(Data {3, 4});
-    EXPECT_EQ(i2, 2ul);
+    EXPECT_EQ(i2, static_cast<size_t>(2));
     auto i3 = storage.push(Data {5, 6});
-    EXPECT_EQ(i3, 3ul);
+    EXPECT_EQ(i3, static_cast<size_t>(3));
 
     // Should have 3 items
     EXPECT_FALSE(storage.is_empty());
-    EXPECT_EQ(storage.count(), 3ul);
+    EXPECT_EQ(storage.count(), static_cast<size_t>(3));
 
     // Should be able to get the data
     auto v1 = storage.get(i1);

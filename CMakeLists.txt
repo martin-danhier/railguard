@@ -21,6 +21,11 @@ set(settings
 set(enable_asan  0)
 set(enable_ubsan 0)
 
+# Enable/disable interactivity
+# Setting this to 0 will add timers to ensure that no test is blocked in a loop, waiting for user input.
+# Useful for CI, where the value is always overridden to 0 automatically.
+set(interactive 1)
+
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 20)
@@ -43,6 +48,7 @@ set(railguard_lib_sources
     include/railguard/utils/vector.h
     include/railguard/utils/optional.h
     include/railguard/utils/storage.h
+    include/railguard/utils/event_sender.h
 )
 
 # Add header directories for main lib
@@ -90,7 +96,6 @@ if (WIN32)
     if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
         add_compile_options(
             -g
-            -
         )
     endif()
 endif()
@@ -104,6 +109,23 @@ endif()
 if (${enable_ubsan} STREQUAL "1")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
+endif()
+
+# On a CI, override the value of interactive with 1
+# We know that we are on a CI if the CI environment variable is set
+if (DEFINED CI)
+    set(interactive 1)
+endif()
+
+# Enable or not interactivity
+if (${interactive} STREQUAL "1")
+    add_compile_definitions(
+        INTERACTIVE
+    )
+else()
+    add_compile_definitions(
+        NO_INTERACTIVE
+    )
 endif()
 
 ##################################################################
@@ -128,6 +150,13 @@ endif()
 add_subdirectory(external)
 
 # Link dependencies
+if (${interactive} STREQUAL "0")
+    # Link pthread on linux
+    if (UNIX)
+        target_link_libraries(railguard_lib PUBLIC pthread)
+    endif()
+endif()
+
 if (DEFINED RENDERER_VULKAN)
     target_link_libraries(railguard_lib PUBLIC
         Vulkan::Vulkan
@@ -163,7 +192,6 @@ macro(add_unit_test)
     # Also replace \ by /
     string(REGEX REPLACE "/" "-" TEST_NAME ${TEST_NAME})
 
-
     # Compile test
     message(STATUS "Generating test \"${TEST_NAME}\"")
     add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE})
@@ -172,6 +200,7 @@ macro(add_unit_test)
     # Set directory for executable
     set_target_properties(${TEST_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tests"
+        COMPILE_DEFINITIONS UNIT_TESTS
     )
 
     # Link project lib and testing framework

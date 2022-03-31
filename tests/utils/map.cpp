@@ -43,14 +43,14 @@ TEST {
     map.set(47, Data{11, 12});
     map.set(48, Data{13, 14});
 
-    EXPECT_EQ(map.count(), 7ul);
+    EXPECT_EQ(map.count(), static_cast<size_t>(7));
 
     // Iterate over all values
     for (auto &entry: map) {
         entry.value().a += 1;
     }
 
-    EXPECT_EQ(map.count(), 7ul);
+    EXPECT_EQ(map.count(), static_cast<size_t>(7));
 
     ASSERT_TRUE(map.get(42).has_value());
     EXPECT_EQ(map.get(42).value().a, 2);

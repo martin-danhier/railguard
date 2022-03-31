@@ -2,10 +2,23 @@
 
 #include <cstdint>
 
+// Forward declarations for vulkan
+#ifdef RENDERER_VULKAN
+typedef struct VkInstance_T   *VkInstance;
+typedef struct VkSurfaceKHR_T *VkSurfaceKHR;
+#endif
+
 namespace rg
 {
+    // Forward declare templates to avoid includes
 
-    struct Extend2D
+    template<typename EventData>
+    class EventSender;
+
+    template<typename T>
+    class Array;
+
+    struct Extent2D
     {
         uint32_t width;
         uint32_t height;
@@ -19,10 +32,13 @@ namespace rg
         struct Data;
 
         // Pointer to the data
-        Data *data;
+        Data *m_data = nullptr;
 
       public:
-        Window(Extend2D extent, const char *title);
+        // Constructor
+        Window(Extent2D extent, const char *title);
+        // No copy constructor: we want only 1 handler per window because we don't have a reference count to handle deletion properly
+        Window(Window &&other) noexcept;
         ~Window();
 
         /**
@@ -34,12 +50,21 @@ namespace rg
          */
         static double compute_delta_time(uint64_t *current_frame_time);
 
-        // bool handle_events();
+        void handle_events();
 
         // Getters
-        // Extend2D get_current_extent();
+        Extent2D get_current_extent();
 
         // Events
+        [[nodiscard]] EventSender<Extent2D>       *on_resize() const;
+        [[nodiscard]] EventSender<std::nullptr_t> *on_close() const;
+
+        // Vulkan specific
+
+#ifdef RENDERER_VULKAN
+        rg::Array<const char *> &&get_required_vulkan_extensions(uint32_t extra_array_size);
+        VkSurfaceKHR  get_vulkan_surface(VkInstance vulkan_instance);
+#endif
     };
 
 } // namespace rg

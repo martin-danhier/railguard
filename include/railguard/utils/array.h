@@ -20,29 +20,29 @@ namespace rg
 
         ~Array()
         {
-            delete[] this->data;
+            delete[] m_data;
         }
 
         // Operators
         T &operator[](size_t index)
         {
-            return this->data[index];
+            return m_data[index];
         }
 
         const T &operator[](size_t index) const
         {
-            return this->data[index];
+            return m_data[index];
         }
 
         // Getters
         [[nodiscard]] size_t count() const
         {
-            return this->m_count;
+            return m_count;
         }
 
         [[nodiscard]] T *data() const
         {
-            return this->m_data;
+            return m_data;
         }
     };
 
