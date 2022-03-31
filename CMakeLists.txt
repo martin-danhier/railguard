@@ -113,7 +113,8 @@ endif()
 
 # On a CI, override the value of interactive with 1
 # We know that we are on a CI if the CI environment variable is set
-if (DEFINED $ENV{CI})
+if (DEFINED ENV{CI})
+    message(STATUS "Continuous integration detected, disabling interactive mode")
     set(interactive 1)
 endif()
 
