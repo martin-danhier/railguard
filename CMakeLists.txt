@@ -113,7 +113,7 @@ endif()
 
 # On a CI, override the value of interactive with 1
 # We know that we are on a CI if the CI environment variable is set
-if (DEFINED CI)
+if (DEFINED $ENV{CI})
     set(interactive 1)
 endif()
 
