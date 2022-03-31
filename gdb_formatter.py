@@ -54,6 +54,52 @@ class VectorPrinter:
     def display_hint(self):
         return 'array'
 
+
+# ====== Array<T> ======
+
+class ArrayPrinter:
+    """Prints a rg::Array<T>"""
+
+    class _iterator:
+        def __init__(self, array, count):
+            self.array = array
+            self.i = 0
+            self.count = count
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return self.next()
+
+        def next(self):
+            if self.i == self.count:
+                raise StopIteration
+
+            value = self.array[self.i]
+            self.i += 1
+
+            return '[%d]' % (self.i - 1), value
+
+    def __init__(self, val):
+        self.value_type = val.type.template_argument(0)
+
+        # Get impl field
+        self.data = val['m_data'].cast(self.value_type.pointer())
+
+        # Get count field
+        self.count = val['m_count']
+
+    def to_string(self):
+        # Load all values of self.data
+        return "Array<%s>(%d)" % (self.value_type, self.count)
+
+    def children(self):
+        return self._iterator(self.data, self.count)
+
+    def display_hint(self):
+        return 'array'
+
 # ====== HashMap ======
 
 class HashMapPrinter:
@@ -89,7 +135,6 @@ class HashMapPrinter:
 
             return str(self.key), self.value
 
-
     def __init__(self, val):
         self.val = val
 
@@ -98,8 +143,8 @@ class HashMapPrinter:
 
         # Get capacity and count
         self.capacity = data['capacity']
-        self.count    = data['count']
-        self.entries  = data['entries']
+        self.count = data['count']
+        self.entries = data['entries']
 
     def to_string(self):
         return 'HashMap(capacity=%d, count=%d)' % (self.capacity, self.count)
@@ -109,6 +154,7 @@ class HashMapPrinter:
 
     def display_hint(self):
         return 'array'
+
 
 # ====== rg::Map<T> ======
 
@@ -130,7 +176,6 @@ class MapPrinter:
 
             return str(entry["m_key"]), entry["m_value"]
 
-
     def __init__(self, val):
         # Get template parameters
         self.value_type = val.type.template_argument(0)
@@ -142,7 +187,7 @@ class MapPrinter:
         map = val['m_hash_map']
         # Get capacity and count
         self.capacity = map['m_data']['capacity']
-        self.count    = map['m_data']['count']
+        self.count = map['m_data']['count']
 
     def to_string(self):
         return 'Map<%s>(capacity=%d, count=%d)' % (self.value_type, self.capacity, self.count)
@@ -152,6 +197,7 @@ class MapPrinter:
 
     def display_hint(self):
         return 'array'
+
 
 # ====== Storage<T> ======
 
@@ -187,6 +233,7 @@ class StoragePrinter:
 def build_pretty_printer():
     pp = printing.RegexpCollectionPrettyPrinter("rg")
     pp.add_printer('Vector', '^rg::Vector<.*>$', VectorPrinter)
+    pp.add_printer('Array', '^rg::Array<.*>$', ArrayPrinter)
     pp.add_printer('HashMap', '^rg::HashMap$', HashMapPrinter)
     pp.add_printer('Map', '^rg::Map<.*>$', MapPrinter)
     pp.add_printer('Storage', '^rg::Storage<.*>$', StoragePrinter)

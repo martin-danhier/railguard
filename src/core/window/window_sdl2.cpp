@@ -152,7 +152,7 @@ EventSender<std::nullptr_t> *rg::Window::on_close() const
 // Vulkan-specific
 
 #ifdef RENDERER_VULKAN
-rg::Array<const char *> &&rg::Window::get_required_vulkan_extensions(uint32_t extra_array_size)
+rg::Array<const char *> rg::Window::get_required_vulkan_extensions(uint32_t extra_array_size) const
 {
     // Get the number of required extensions
     uint32_t required_extensions_count = 0;
@@ -164,7 +164,7 @@ rg::Array<const char *> &&rg::Window::get_required_vulkan_extensions(uint32_t ex
     Array<const char*> required_extensions(required_extensions_count + extra_array_size);
     sdl_check(SDL_Vulkan_GetInstanceExtensions(m_data->sdl_window, &required_extensions_count, required_extensions.data()));
 
-    return std::move(required_extensions);
+    return required_extensions;
 }
 
 VkSurfaceKHR rg::Window::get_vulkan_surface(VkInstance vulkan_instance)
