@@ -9,6 +9,8 @@ on:
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
+  # Env var to let CMake know we are in a CI
+  CI: 1
 
 jobs:
   build:
