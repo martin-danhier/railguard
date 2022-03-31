@@ -111,11 +111,11 @@ if (${enable_ubsan} STREQUAL "1")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
 endif()
 
-# On a CI, override the value of interactive with 1
+# On a CI, override the value of interactive with 0
 # We know that we are on a CI if the CI environment variable is set
 if (DEFINED ENV{CI})
     message(STATUS "Continuous integration detected, disabling interactive mode")
-    set(interactive 1)
+    set(interactive 0)
 endif()
 
 # Enable or not interactivity
