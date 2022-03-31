@@ -63,7 +63,7 @@ namespace rg
 
 #ifdef RENDERER_VULKAN
         [[nodiscard]] rg::Array<const char *> get_required_vulkan_extensions(uint32_t extra_array_size) const;
-        VkSurfaceKHR  get_vulkan_surface(VkInstance vulkan_instance);
+        VkSurfaceKHR  get_vulkan_surface(VkInstance vulkan_instance) const;
 #endif
     };
 

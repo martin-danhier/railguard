@@ -10,11 +10,14 @@ namespace rg
     class Array
     {
       private:
-        size_t m_count {};
-        T     *m_data = nullptr;
+        size_t m_count = 0;
+        T     *m_data  = nullptr;
 
       public:
         // Constructor
+
+        Array() = default;
+
         explicit Array(size_t count) : m_count(count), m_data(new T[count])
         {
             // Set all elements to zero
@@ -24,22 +27,58 @@ namespace rg
             }
         }
 
-        Array(const Array &other) {
+        Array(const Array &other)
+        {
             // Deep copy
             m_count = other.m_count;
-            m_data = new T[m_count];
+            m_data  = new T[m_count];
             for (size_t i = 0; i < m_count; ++i)
             {
                 m_data[i] = other.m_data[i];
             }
         }
 
-        Array(Array &&other)  noexcept {
+        Array(Array &&other) noexcept
+        {
             // Move
-            m_count = other.m_count;
-            m_data = other.m_data;
+            m_count       = other.m_count;
+            m_data        = other.m_data;
             other.m_count = 0;
-            other.m_data = nullptr;
+            other.m_data  = nullptr;
+        }
+
+        Array &operator=(const Array &other)
+        {
+            if (this == &other)
+                return *this;
+
+            // Call destructor to clean this array before copying
+            this->~Array();
+
+            // Deep copy
+            m_count = other.m_count;
+            m_data  = new T[m_count];
+            for (size_t i = 0; i < m_count; ++i)
+            {
+                m_data[i] = other.m_data[i];
+            }
+            return *this;
+        }
+
+        Array &operator=(Array &&other) noexcept
+        {
+            if (this == &other)
+                return *this;
+
+            // Call destructor to clean this array before moving
+            this->~Array();
+
+            // Move
+            m_count       = other.m_count;
+            m_data        = other.m_data;
+            other.m_count = 0;
+            other.m_data  = nullptr;
+            return *this;
         }
 
         // List initializer
@@ -56,7 +95,18 @@ namespace rg
 
         ~Array()
         {
-            delete[] m_data;
+            if (m_data != nullptr)
+            {
+                // Call destructor on all elements
+                for (size_t i = 0; i < m_count; ++i)
+                {
+                    m_data[i].~T();
+                }
+
+                delete[] m_data;
+                m_data = nullptr;
+                m_count = 0;
+            }
         }
 
         // Operators
@@ -82,48 +132,60 @@ namespace rg
         }
 
         // Iterator
-        class Iterator {
+        class Iterator
+        {
           public:
             // Traits
-            using difference_type = ptrdiff_t;
-            using value_type = T;
-            using pointer = value_type *;
-            using reference = value_type &;
+            using difference_type   = ptrdiff_t;
+            using value_type        = T;
+            using pointer           = value_type *;
+            using reference         = value_type &;
             using iterator_category = std::bidirectional_iterator_tag;
-          private:
-            T *m_data;
-            size_t m_index;
-          public:
-            Iterator(T *data, size_t index) : m_data(data), m_index(index) {}
 
-            Iterator &operator++() {
+          private:
+            T     *m_data;
+            size_t m_index;
+
+          public:
+            Iterator(T *data, size_t index) : m_data(data), m_index(index)
+            {
+            }
+
+            Iterator &operator++()
+            {
                 ++m_index;
                 return *this;
             }
 
-            Iterator &operator--() {
+            Iterator &operator--()
+            {
                 --m_index;
                 return *this;
             }
 
-            bool operator!=(const Iterator &other) const {
+            bool operator!=(const Iterator &other) const
+            {
                 return m_index != other.m_index;
             }
 
-            T &operator*() {
+            T &operator*()
+            {
                 return m_data[m_index];
             }
 
-            T *operator->() {
+            T *operator->()
+            {
                 return &m_data[m_index];
             }
         };
 
-        Iterator begin() const {
+        Iterator begin() const
+        {
             return Iterator(m_data, 0);
         }
 
-        Iterator end() const {
+        Iterator end() const
+        {
             return Iterator(m_data, m_count);
         }
     };

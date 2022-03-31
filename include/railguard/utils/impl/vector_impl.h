@@ -13,13 +13,13 @@ namespace rg::_impl
         /** @brief Number of elements in the vector.
          *  @invariant Smaller or equal than capacity.
          */
-        size_t m_count;
+        size_t m_count = 0;
         /** @brief Maximum number of elements that the allocation can fit without resizing.
          *  A value of 0 indicates that the vector is not allocated (data is NULL).
          */
-        size_t m_capacity;
+        size_t m_capacity = 0;
         /** @brief Size of a single element. */
-        size_t m_element_size;
+        size_t m_element_size = 0;
         /** @brief Pointer to the first element of the vector
          *  @invariant Is NULL if capacity is 0, otherwise there is enough memory allocated after the pointed location to contain
          *  capacity * element_size bytes.
@@ -28,9 +28,10 @@ namespace rg::_impl
         /**
          * Value defining by how much the vector should grow if a push doesn't have enough space.
          */
-        size_t m_growth_amount;
+        size_t m_growth_amount = 0;
 
       public:
+        VectorImpl() = default;
         VectorImpl(size_t initial_capacity, size_t element_size);
         VectorImpl(const VectorImpl &other);
         VectorImpl(VectorImpl &&other) noexcept;

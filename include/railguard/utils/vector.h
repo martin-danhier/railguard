@@ -12,7 +12,9 @@ namespace rg
         _impl::VectorImpl m_impl;
 
       public:
-        explicit Vector(size_t initial_capacity = 1) : m_impl(initial_capacity, sizeof(T))
+        Vector() = default;
+
+        explicit Vector(size_t initial_capacity) : m_impl(initial_capacity, sizeof(T))
         {
         }
 

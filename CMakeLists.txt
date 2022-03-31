@@ -163,6 +163,7 @@ if (DEFINED RENDERER_VULKAN)
     target_link_libraries(railguard_lib PUBLIC
         Vulkan::Vulkan
         volk
+        vma
     )
 endif()
 

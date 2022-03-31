@@ -167,7 +167,7 @@ rg::Array<const char *> rg::Window::get_required_vulkan_extensions(uint32_t extr
     return required_extensions;
 }
 
-VkSurfaceKHR rg::Window::get_vulkan_surface(VkInstance vulkan_instance)
+VkSurfaceKHR rg::Window::get_vulkan_surface(VkInstance vulkan_instance) const
 {
     VkSurfaceKHR surface = nullptr;
     sdl_check(SDL_Vulkan_CreateSurface(m_data->sdl_window, vulkan_instance, &surface));
