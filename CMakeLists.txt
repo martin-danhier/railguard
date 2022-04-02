@@ -83,7 +83,7 @@ endforeach()
 
 # Vulkan specific
 if (DEFINED RENDERER_VULKAN)
-    add_compile_definitions(VK_NO_PROTOTYPE)
+    add_compile_definitions(VK_NO_PROTOTYPES)
 
     if (CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_definitions(

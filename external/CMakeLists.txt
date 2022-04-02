@@ -68,7 +68,7 @@ if (DEFINED RENDERER_VULKAN)
     target_sources(vma PRIVATE
             vma_implementation.cpp
             )
-    target_include_directories(vma PUBLIC vma/include)
+    target_include_directories(vma SYSTEM PUBLIC vma/include)
     target_link_libraries(vma PUBLIC Vulkan::Vulkan $<$<BOOL:UNIX>:${CMAKE_DL_LIBS}>)
 endif()
 
