@@ -2,6 +2,7 @@
 #include "railguard/core/renderer.h"
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
+#include <railguard/utils/event_sender.h>
 #include <railguard/utils/storage.h>
 
 #include <iostream>
@@ -24,20 +25,6 @@ namespace rg
 
     // Allocator
 
-    class Allocator
-    {
-      private:
-        VmaAllocator m_allocator = VK_NULL_HANDLE;
-
-      public:
-        Allocator() = default;
-        Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device);
-        Allocator(Allocator &&other) noexcept;
-        Allocator &operator=(Allocator &&other) noexcept;
-
-        ~Allocator();
-    };
-
     struct AllocatedBuffer
     {
         VmaAllocation allocation = VK_NULL_HANDLE;
@@ -50,6 +37,28 @@ namespace rg
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkImage       image      = VK_NULL_HANDLE;
         VkImageView   image_view = VK_NULL_HANDLE;
+    };
+
+    class Allocator
+    {
+      private:
+        VmaAllocator m_allocator = VK_NULL_HANDLE;
+
+      public:
+        Allocator() = default;
+        Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device);
+        Allocator(Allocator &&other) noexcept;
+        Allocator &operator=(Allocator &&other) noexcept;
+
+        ~Allocator();
+
+        AllocatedImage create_image(VkDevice              device,
+                                    VkFormat              image_format,
+                                    VkExtent3D            image_extent,
+                                    VkImageUsageFlags     image_usage,
+                                    VkImageAspectFlagBits image_aspect,
+                                    VmaMemoryUsage        memory_usage) const;
+        void           destroy_image(VkDevice device, AllocatedImage &image) const;
     };
 
     // Material system
@@ -102,6 +111,20 @@ namespace rg
 
     // Main types
 
+    struct RenderBatch
+    {
+        size_t     offset;
+        size_t     count;
+        VkPipeline pipeline;
+    };
+
+    struct RenderStage
+    {
+        RenderStageKind     kind            = RenderStageKind::INVALID;
+        AllocatedBuffer     indirect_buffer = {};
+        Vector<RenderBatch> batches {5};
+    };
+
     struct Passes
     {
         VkRenderPass geometry_pass = VK_NULL_HANDLE;
@@ -125,7 +148,30 @@ namespace rg
 
     struct Swapchain
     {
-        bool enabled = false;
+        bool           enabled         = false;
+        VkSwapchainKHR vk_swapchain    = VK_NULL_HANDLE;
+        VkExtent2D     viewport_extent = {};
+        // Swapchain images
+        uint32_t           image_count  = 0;
+        VkSurfaceFormatKHR image_format = {};
+        // Store images
+        Array<VkImage>       images       = {};
+        Array<VkImageView>   image_views  = {};
+        Array<VkFramebuffer> framebuffers = {};
+        // Present mode
+        VkPresentModeKHR              present_mode  = VK_PRESENT_MODE_MAILBOX_KHR;
+        VkSurfaceTransformFlagBitsKHR pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        // Depth image
+        VkFormat       depth_image_format = VK_FORMAT_UNDEFINED;
+        AllocatedImage depth_image        = {};
+        // Target window
+        Window                   *target_window                  = nullptr;
+        EventSender<Extent2D>::Id window_resize_event_handler_id = NULL_ID;
+        VkSurfaceKHR              surface                        = VK_NULL_HANDLE;
+        // Render stages
+        Array<RenderStage> render_stages = {};
+        // Link to renderer to be able to go back to it from here
+        Renderer *renderer = nullptr;
     };
 
     struct Renderer::Data
@@ -164,9 +210,13 @@ namespace rg
 
         // ------------ Methods ------------
 
-        [[nodiscard]] VkSurfaceFormatKHR select_surface_format(const Window &example_window) const;
-        inline void                      wait_for_fence(VkFence fence) const;
-        inline void                      wait_for_all_fences() const;
+        inline void wait_for_fence(VkFence fence) const;
+        inline void wait_for_all_fences() const;
+
+        [[nodiscard]] VkSurfaceFormatKHR select_surface_format(const VkSurfaceKHR &surface) const;
+        void                             destroy_swapchain(Swapchain &swapchain) const;
+        void                             clear_swapchains();
+        void                             init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const;
     };
 
     // ---==== Utilities ====---
@@ -182,6 +232,18 @@ namespace rg
             case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
             case VK_TIMEOUT: return "VK_TIMEOUT";
             default: return std::to_string(result);
+        }
+    }
+
+    std::string vk_present_mode_to_string(VkPresentModeKHR present_mode)
+    {
+        switch (present_mode)
+        {
+            case VK_PRESENT_MODE_IMMEDIATE_KHR: return "Immediate";
+            case VK_PRESENT_MODE_MAILBOX_KHR: return "Mailbox";
+            case VK_PRESENT_MODE_FIFO_KHR: return "FIFO";
+            case VK_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO Relaxed";
+            default: return std::to_string(present_mode);
         }
     }
 
@@ -487,14 +549,91 @@ namespace rg
         }
         return *this;
     }
+
+    AllocatedImage Allocator::create_image(VkDevice              device,
+                                           VkFormat              image_format,
+                                           VkExtent3D            image_extent,
+                                           VkImageUsageFlags     image_usage,
+                                           VkImageAspectFlagBits image_aspect,
+                                           VmaMemoryUsage        memory_usage) const
+    {
+        // We use VMA for now. We can always switch to a custom allocator later if we want to.
+        AllocatedImage image;
+
+        check(image_extent.width >= 1 && image_extent.height >= 1 && image_extent.depth >= 1,
+              "Tried to create an image with an invalid extent. The extent must be at least 1 in each dimension.");
+
+        // Create the image using VMA
+        VkImageCreateInfo image_create_info = {
+            .sType                 = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext                 = nullptr,
+            .flags                 = 0,
+            .imageType             = VK_IMAGE_TYPE_2D,
+            .format                = image_format,
+            .extent                = image_extent,
+            .mipLevels             = 1,
+            .arrayLayers           = 1,
+            .samples               = VK_SAMPLE_COUNT_1_BIT,
+            .tiling                = VK_IMAGE_TILING_OPTIMAL,
+            .usage                 = image_usage,
+            .sharingMode           = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices   = nullptr,
+            .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+        VmaAllocationCreateInfo alloc_create_info = {
+            .usage          = memory_usage,
+            .preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        };
+
+        // Create the image
+        vk_check(vmaCreateImage(m_allocator, &image_create_info, &alloc_create_info, &image.image, &image.allocation, nullptr),
+                 "Failed to create image");
+
+        // Create image view
+        VkImageViewCreateInfo image_view_create_info = {
+            .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext    = nullptr,
+            .flags    = 0,
+            .image    = image.image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format   = image_format,
+            .components =
+                {
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                    VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+            .subresourceRange =
+                {
+                    image_aspect,
+                    0,
+                    1,
+                    0,
+                    1,
+                },
+        };
+        vk_check(vkCreateImageView(device, &image_view_create_info, nullptr, &image.image_view), "Failed to create image view");
+
+        return image;
+    }
+
+    void Allocator::destroy_image(VkDevice device, AllocatedImage &image) const
+    {
+        vkDestroyImageView(device, image.image_view, nullptr);
+        vmaDestroyImage(m_allocator, image.image, image.allocation);
+        image.image      = VK_NULL_HANDLE;
+        image.allocation = VK_NULL_HANDLE;
+        image.image_view = VK_NULL_HANDLE;
+    }
+
     // endregion
 
     // region Format functions
 
-    VkSurfaceFormatKHR Renderer::Data::select_surface_format(const Window &example_window) const
+    VkSurfaceFormatKHR Renderer::Data::select_surface_format(const VkSurfaceKHR &surface) const
     {
-        // Get surface
-        VkSurfaceKHR       surface        = example_window.get_vulkan_surface(instance);
         VkSurfaceFormatKHR surface_format = {VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
         // Get the available formats
@@ -536,9 +675,6 @@ namespace rg
         }
         check(found, "Couldn't find an appropriate format for the surface.");
 
-        // Destroy the surface - this was just an example window, we will create a new one later
-        vkDestroySurfaceKHR(instance, surface, nullptr);
-
         return surface_format;
     }
 
@@ -566,6 +702,165 @@ namespace rg
         // Wait for them
         vk_check(vkWaitForFences(device, NB_OVERLAPPING_FRAMES, fences, VK_TRUE, WAIT_FOR_FENCES_TIMEOUT),
                  "Failed to wait for fences");
+    }
+
+    // endregion
+
+    // region Swapchain functions
+    void Renderer::Data::destroy_swapchain(Swapchain &swapchain) const
+    {
+        // If swapchain is disabled, then it is already destroyed and the contract is satisfied
+        if (swapchain.enabled)
+        {
+            // Destroy framebuffers
+            for (auto &framebuffer : swapchain.framebuffers)
+            {
+                vkDestroyFramebuffer(device, framebuffer, nullptr);
+            }
+
+            // Destroy depth image
+            allocator.destroy_image(device, swapchain.depth_image);
+
+            // Destroy images
+            for (uint32_t i = 0; i < swapchain.image_count; i++)
+            {
+                vkDestroyImageView(device, swapchain.image_views[i], nullptr);
+            }
+
+            // Destroy swapchain
+            vkDestroySwapchainKHR(device, swapchain.vk_swapchain, nullptr);
+
+            // Destroy surface
+            vkDestroySurfaceKHR(instance, swapchain.surface, nullptr);
+            swapchain.surface = VK_NULL_HANDLE;
+
+            // Disable it
+            swapchain.enabled = false;
+        }
+    }
+
+    void Renderer::Data::clear_swapchains()
+    {
+        for (auto &swapchain : swapchains)
+        {
+            destroy_swapchain(swapchain);
+        }
+    }
+
+    void Renderer::Data::init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const
+    {
+        // region Swapchain creation
+
+        // Save extent
+        swapchain.viewport_extent = VkExtent2D {extent.width, extent.height};
+
+        // Create the swapchain
+        VkSwapchainCreateInfoKHR create_info = {
+            // Struct info
+            .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .pNext = nullptr,
+            // Image options
+            .surface          = swapchain.surface,
+            .minImageCount    = swapchain.image_count,
+            .imageFormat      = swapchain.image_format.format,
+            .imageColorSpace  = swapchain.image_format.colorSpace,
+            .imageExtent      = swapchain.viewport_extent,
+            .imageArrayLayers = 1,
+            .imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            // For now, we use the same queue for rendering and presenting. Maybe in the future, we will want to change that.
+            .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .preTransform     = swapchain.pre_transform,
+            .compositeAlpha   = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            // Present options
+            .presentMode  = swapchain.present_mode,
+            .clipped      = VK_TRUE,
+            .oldSwapchain = VK_NULL_HANDLE,
+        };
+        vk_check(vkCreateSwapchainKHR(device, &create_info, nullptr, &swapchain.vk_swapchain), "Failed to create swapchain");
+
+        // endregion
+
+        // region Images and image views
+
+        // Get the images
+        uint32_t effective_image_count;
+        vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &effective_image_count, nullptr));
+        swapchain.images = Array<VkImage>(effective_image_count);
+        vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &effective_image_count, swapchain.images.data()));
+
+        // Update the image count based on how many were effectively created
+        swapchain.image_count = effective_image_count;
+
+        // Create image views for those images
+        swapchain.image_views = Array<VkImageView>(effective_image_count);
+        VkImageViewCreateInfo image_view_create_info {
+            .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext    = nullptr,
+            .flags    = 0,
+            .image    = VK_NULL_HANDLE,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format   = swapchain.image_format.format,
+            .components =
+                {
+                    .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+            .subresourceRange =
+                {
+                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel   = 0,
+                    .levelCount     = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount     = 1,
+                },
+        };
+        for (uint32_t i = 0; i < effective_image_count; i++)
+        {
+            image_view_create_info.image = swapchain.images[i];
+            vk_check(vkCreateImageView(device, &image_view_create_info, nullptr, &swapchain.image_views[i]),
+                     "Failed to create image view for swapchain image");
+        }
+
+        // endregion
+
+        // region Depth image creation
+
+        VkExtent3D depth_image_extent = {extent.width, extent.height, 1};
+        swapchain.depth_image_format  = VK_FORMAT_D32_SFLOAT;
+        swapchain.depth_image         = allocator.create_image(device,
+                                                       swapchain.depth_image_format,
+                                                       depth_image_extent,
+                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                                       VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                       VMA_MEMORY_USAGE_GPU_ONLY);
+
+        // endregion
+
+        // region Framebuffer creation
+
+        swapchain.framebuffers = Array<VkFramebuffer>(effective_image_count);
+        VkFramebufferCreateInfo framebuffer_create_info {
+            .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext           = nullptr,
+            .flags           = 0,
+            .renderPass      = passes.lighting_pass,
+            .attachmentCount = 1,
+            .pAttachments    = nullptr,
+            .width           = extent.width,
+            .height          = extent.height,
+            .layers          = 1,
+        };
+
+        for (uint32_t i = 0; i < effective_image_count; i++)
+        {
+            framebuffer_create_info.pAttachments = &swapchain.image_views[i];
+            vk_check(vkCreateFramebuffer(device, &framebuffer_create_info, nullptr, &swapchain.framebuffers[i]),
+                     "Failed to create framebuffer");
+        }
+
+        // endregion
     }
 
     // endregion
@@ -799,7 +1094,10 @@ namespace rg
         {
             // Choose a swapchain_image_format for the given example window
             // For now we will assume that all swapchain will use that swapchain_image_format
-            VkSurfaceFormatKHR swapchain_image_format = m_data->select_surface_format(example_window);
+            VkSurfaceKHR       example_surface        = example_window.get_vulkan_surface(m_data->instance);
+            VkSurfaceFormatKHR swapchain_image_format = m_data->select_surface_format(example_surface);
+            // Destroy the surface - this was just an example window, we will create a new one later
+            vkDestroySurfaceKHR(m_data->instance, example_surface, nullptr);
 
             // Create geometric render pass
 
@@ -976,6 +1274,9 @@ namespace rg
         m_data->shader_effects.clear();
         m_data->shader_modules.clear();
 
+        // Clear swapchains
+        m_data->clear_swapchains();
+
         // Destroy swapchains
         m_data->swapchains.~Array();
 
@@ -1000,6 +1301,129 @@ namespace rg
         // Free memory
         delete m_data;
         m_data = nullptr;
+    }
+
+    void Renderer::connect_window(uint32_t window_slot_index, Window &window)
+    {
+        // Prevent access to the positions that are outside the swapchain array
+        check(window_slot_index < m_data->swapchains.count(), "Window index is out of bounds");
+
+        // Get the swapchain in the renderer
+        Swapchain &swapchain = m_data->swapchains[window_slot_index];
+
+        // Ensure that there is not a live swapchain here already
+        check(!swapchain.enabled,
+              "Attempted to create a swapchain in a slot where there was already an active one."
+              " To recreate a swapchain, see rg_renderer_recreate_swapchain.");
+
+        // Save renderer to be able to access it from events
+        swapchain.renderer = this;
+
+        // region Window & Surface
+
+        // Get the window's surface
+        swapchain.target_window = &window;
+        swapchain.surface       = window.get_vulkan_surface(m_data->instance);
+
+        // Check that the surface is supported
+        VkBool32 surface_supported = false;
+        vkGetPhysicalDeviceSurfaceSupportKHR(m_data->physical_device,
+                                             m_data->graphics_queue.family_index,
+                                             swapchain.surface,
+                                             &surface_supported);
+        check(surface_supported, "The chosen GPU is unable to render to the given surface.");
+
+        // endregion
+
+        // region Choose a present mode
+
+        {
+            // Get the list of supported present modes
+            uint32_t present_mode_count = 0;
+            vk_check(
+                vkGetPhysicalDeviceSurfacePresentModesKHR(m_data->physical_device, swapchain.surface, &present_mode_count, nullptr));
+            Array<VkPresentModeKHR> available_present_modes(present_mode_count);
+            vk_check(vkGetPhysicalDeviceSurfacePresentModesKHR(m_data->physical_device,
+                                                               swapchain.surface,
+                                                               &present_mode_count,
+                                                               available_present_modes.data()));
+
+            bool                       present_mode_found = false;
+            constexpr VkPresentModeKHR desired_modes[]    = {
+                VK_PRESENT_MODE_MAILBOX_KHR,
+                VK_PRESENT_MODE_FIFO_KHR,
+            };
+            for (const auto &available_mode : available_present_modes)
+            {
+                for (const auto &desired_mode : desired_modes)
+                {
+                    if (available_mode == desired_mode)
+                    {
+                        swapchain.present_mode = desired_mode;
+                        present_mode_found     = true;
+                        break;
+                    }
+                }
+                if (present_mode_found)
+                {
+                    break;
+                }
+            }
+            check(present_mode_found, "Could not find a suitable present mode for this surface.");
+
+            // Log choice
+            std::cout << "Chosen present mode: " << vk_present_mode_to_string(swapchain.present_mode) << std::endl;
+        }
+
+        // endregion
+
+        // region Image count selection
+
+        VkSurfaceCapabilitiesKHR surface_capabilities = {};
+        vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_data->physical_device, swapchain.surface, &surface_capabilities));
+
+        // For the image count, take the minimum plus one. Or, if the minimum is equal to the maximum, take that value.
+        uint32_t image_count = surface_capabilities.minImageCount + 1;
+        if (surface_capabilities.maxImageCount > 0 && image_count > surface_capabilities.maxImageCount)
+        {
+            image_count = surface_capabilities.maxImageCount;
+        }
+        swapchain.image_count   = image_count;
+        swapchain.pre_transform = surface_capabilities.currentTransform;
+
+        // endregion
+
+        swapchain.image_format = m_data->select_surface_format(swapchain.surface);
+
+        // Get window extent
+        auto extent = window.get_current_extent();
+
+        m_data->init_swapchain_inner(swapchain, extent);
+
+        // region Init render stages
+
+        // Using a dynamic array allows us to define a parameter to this function to define the stages
+        swapchain.render_stages = Array<RenderStage>(RENDER_STAGE_COUNT);
+
+        // Init stages
+        // They are hardcoded for now
+        swapchain.render_stages[0].kind = RenderStageKind::GEOMETRY;
+        swapchain.render_stages[1].kind = RenderStageKind::LIGHTING;
+
+        // endregion
+
+        // region Register to window events
+
+        swapchain.window_resize_event_handler_id = window.on_resize()->subscribe(
+            [](const Extent2D &new_extent) {
+                std::cout << "Window resized to " << new_extent.width << "x" << new_extent.height << std::endl;
+                // TODO
+            });
+
+        // endregion
+
+        // Enable it
+        swapchain.enabled = true;
     }
 
 } // namespace rg

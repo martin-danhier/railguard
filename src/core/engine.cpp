@@ -37,6 +37,9 @@ namespace rg
         // Create renderer
         Renderer renderer(window, title, {0, 1, 0}, 2);
 
+        // Link window
+        renderer.connect_window(0, window);
+
         // Save data in engine
         m_data = new Data(std::move(window), std::move(renderer));
     }

@@ -97,6 +97,14 @@ namespace rg
 
         Renderer(Renderer &&other) noexcept;
 
+        /**
+         * Links the window to the renderer in the given slot.
+         * @param window_slot_index Index of the slot where this window will be linked. Must be empty and smaller than the
+         * window capacity.
+         * @param window Window that will be linked to the renderer.
+         */
+         void connect_window(uint32_t window_slot_index, Window &window);
+
         ~Renderer();
     };
 } // namespace rg
