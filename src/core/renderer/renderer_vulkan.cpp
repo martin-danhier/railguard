@@ -113,9 +113,9 @@ namespace rg
 
     struct RenderBatch
     {
-        size_t     offset;
-        size_t     count;
-        VkPipeline pipeline;
+        size_t     offset   = 0;
+        size_t     count    = 0;
+        VkPipeline pipeline = VK_NULL_HANDLE;
     };
 
     struct RenderStage
@@ -170,8 +170,6 @@ namespace rg
         VkSurfaceKHR              surface                        = VK_NULL_HANDLE;
         // Render stages
         Array<RenderStage> render_stages = {};
-        // Link to renderer to be able to go back to it from here
-        Renderer *renderer = nullptr;
     };
 
     struct Renderer::Data
@@ -192,8 +190,8 @@ namespace rg
         Array<Swapchain> swapchains = {};
 
         // Counter of frame since the start of the renderer
-        uint64_t  current_frame_number = 1;
-        FrameData frames[NB_OVERLAPPING_FRAMES];
+        uint64_t  current_frame_number          = 1;
+        FrameData frames[NB_OVERLAPPING_FRAMES] = {};
 
         // Storages for the material system
         Storage<ShaderModule>     shader_modules     = {};
@@ -214,9 +212,11 @@ namespace rg
         inline void wait_for_all_fences() const;
 
         [[nodiscard]] VkSurfaceFormatKHR select_surface_format(const VkSurfaceKHR &surface) const;
+        void                             destroy_swapchain_inner(Swapchain &swapchain) const;
         void                             destroy_swapchain(Swapchain &swapchain) const;
         void                             clear_swapchains();
         void                             init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const;
+        void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const;
     };
 
     // ---==== Utilities ====---
@@ -693,7 +693,8 @@ namespace rg
     void Renderer::Data::wait_for_all_fences() const
     {
         // Get fences in array
-        VkFence fences[NB_OVERLAPPING_FRAMES];
+        VkFence fences[NB_OVERLAPPING_FRAMES] = {};
+
         for (uint32_t i = 0; i < NB_OVERLAPPING_FRAMES; i++)
         {
             fences[i] = frames[i].render_fence;
@@ -706,29 +707,36 @@ namespace rg
 
     // endregion
 
+    void Renderer::Data::destroy_swapchain_inner(Swapchain &swapchain) const
+    {
+        // Destroy framebuffers
+        for (auto &framebuffer : swapchain.framebuffers)
+        {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+
+        // Destroy depth image
+        allocator.destroy_image(device, swapchain.depth_image);
+
+        // Destroy images
+        for (uint32_t i = 0; i < swapchain.image_count; i++)
+        {
+            vkDestroyImageView(device, swapchain.image_views[i], nullptr);
+            swapchain.image_views[i] = VK_NULL_HANDLE;
+        }
+    }
+
     // region Swapchain functions
     void Renderer::Data::destroy_swapchain(Swapchain &swapchain) const
     {
         // If swapchain is disabled, then it is already destroyed and the contract is satisfied
         if (swapchain.enabled)
         {
-            // Destroy framebuffers
-            for (auto &framebuffer : swapchain.framebuffers)
-            {
-                vkDestroyFramebuffer(device, framebuffer, nullptr);
-            }
-
-            // Destroy depth image
-            allocator.destroy_image(device, swapchain.depth_image);
-
-            // Destroy images
-            for (uint32_t i = 0; i < swapchain.image_count; i++)
-            {
-                vkDestroyImageView(device, swapchain.image_views[i], nullptr);
-            }
+            destroy_swapchain_inner(swapchain);
 
             // Destroy swapchain
             vkDestroySwapchainKHR(device, swapchain.vk_swapchain, nullptr);
+            swapchain.vk_swapchain = VK_NULL_HANDLE;
 
             // Destroy surface
             vkDestroySurfaceKHR(instance, swapchain.surface, nullptr);
@@ -861,6 +869,24 @@ namespace rg
         }
 
         // endregion
+    }
+
+    void Renderer::Data::recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const
+    {
+        check(swapchain.enabled,
+              "Attempted to recreate an non-existing swapchain. "
+              "Use renderer.connect_window to create a new one instead.");
+
+        // Wait for fences before recreating
+        wait_for_all_fences();
+
+        // Destroy the old swapchain
+        destroy_swapchain_inner(swapchain);
+
+        // Create the new swapchain
+        init_swapchain_inner(swapchain, new_extent);
+
+        std::cout << "Swapchain recreated" << std::endl;
     }
 
     // endregion
@@ -1316,9 +1342,6 @@ namespace rg
               "Attempted to create a swapchain in a slot where there was already an active one."
               " To recreate a swapchain, see rg_renderer_recreate_swapchain.");
 
-        // Save renderer to be able to access it from events
-        swapchain.renderer = this;
-
         // region Window & Surface
 
         // Get the window's surface
@@ -1414,11 +1437,14 @@ namespace rg
 
         // region Register to window events
 
-        swapchain.window_resize_event_handler_id = window.on_resize()->subscribe(
-            [](const Extent2D &new_extent) {
-                std::cout << "Window resized to " << new_extent.width << "x" << new_extent.height << std::endl;
-                // TODO
-            });
+        // "this" is moved after the creation of the renderer
+        // Thus the pointer doesn't point to the right place anymore when the callback is called
+        // To ensure that the callback uses the real data, we need to copy the pointer to the renderer Data
+        // Also, we fetch the swapchain with the window index again because the swapchain variable here is local
+        auto data = m_data;
+        swapchain.window_resize_event_handler_id =
+            window.on_resize()->subscribe([data, window_slot_index](const Extent2D &new_extent) mutable
+                                          { data->recreate_swapchain(data->swapchains[window_slot_index], new_extent); });
 
         // endregion
 
