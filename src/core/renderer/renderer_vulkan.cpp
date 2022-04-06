@@ -24,6 +24,8 @@ namespace rg
 {
     // ---==== Types ====---
 
+    // region Types
+
     // Allocator
 
     struct AllocatedBuffer
@@ -31,6 +33,8 @@ namespace rg
         VmaAllocation allocation = VK_NULL_HANDLE;
         VkBuffer      buffer     = VK_NULL_HANDLE;
         uint32_t      size       = 0;
+
+        [[nodiscard]] inline bool is_valid() const { return allocation != VK_NULL_HANDLE; }
     };
 
     struct AllocatedImage
@@ -60,6 +64,12 @@ namespace rg
                                     VkImageAspectFlagBits image_aspect,
                                     VmaMemoryUsage        memory_usage) const;
         void           destroy_image(VkDevice device, AllocatedImage &image) const;
+
+        [[nodiscard]] AllocatedBuffer
+              create_buffer(size_t allocation_size, VkBufferUsageFlags buffer_usage, VmaMemoryUsage memory_usage) const;
+        void  destroy_buffer(VkDevice device, AllocatedBuffer &buffer) const;
+        void *map_buffer(AllocatedBuffer &buffer) const;
+        void  unmap_buffer(AllocatedBuffer &buffer) const;
     };
 
     // Material system
@@ -169,6 +179,10 @@ namespace rg
         Window                   *target_window                  = nullptr;
         EventSender<Extent2D>::Id window_resize_event_handler_id = NULL_ID;
         VkSurfaceKHR              surface                        = VK_NULL_HANDLE;
+        // Pipelines
+        // Since vulkan handles are just pointers, a hash map is all we need
+        HashMap  pipelines             = {};
+        uint64_t built_effects_version = 0;
         // Render stages
         Array<RenderStage> render_stages = {};
     };
@@ -209,8 +223,10 @@ namespace rg
 
         // ------------ Methods ------------
 
-        inline void wait_for_fence(VkFence fence) const;
-        inline void wait_for_all_fences() const;
+        inline void                   wait_for_fence(VkFence fence) const;
+        inline void                   wait_for_all_fences() const;
+        [[nodiscard]] inline uint64_t get_current_frame_index() const;
+        inline FrameData             &get_current_frame();
 
         [[nodiscard]] VkSurfaceFormatKHR select_surface_format(const VkSurfaceKHR &surface) const;
         void                             destroy_swapchain_inner(Swapchain &swapchain) const;
@@ -218,7 +234,17 @@ namespace rg
         void                             clear_swapchains();
         void                             init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const;
         void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const;
+
+        VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect);
+        void       build_out_of_date_effects(Swapchain &swapchain);
+        void       clear_pipelines(Swapchain &swapchain) const;
+        void       recreate_pipelines(Swapchain &swapchain);
+        void       destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
+
+        void update_stage_cache(Swapchain &swapchain);
     };
+
+    // endregion
 
     // ---==== Utilities ====---
 
@@ -629,6 +655,60 @@ namespace rg
         image.image_view = VK_NULL_HANDLE;
     }
 
+    AllocatedBuffer
+        Allocator::create_buffer(size_t allocation_size, VkBufferUsageFlags buffer_usage, VmaMemoryUsage memory_usage) const
+    {
+        // We use VMA for now. We can always switch to a custom allocator later if we want to.
+        AllocatedBuffer buffer = {
+            .size = static_cast<uint32_t>(allocation_size),
+        };
+
+        // Create the buffer using VMA
+        VkBufferCreateInfo buffer_create_info = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            // Buffer info
+            .size  = allocation_size,
+            .usage = buffer_usage,
+        };
+
+        // Create an allocation info
+        VmaAllocationCreateInfo allocation_create_info = {
+            .usage = memory_usage,
+        };
+
+        // Create the buffer
+        vk_check(vmaCreateBuffer(m_allocator,
+                                 &buffer_create_info,
+                                 &allocation_create_info,
+                                 &buffer.buffer,
+                                 &buffer.allocation,
+                                 VK_NULL_HANDLE),
+                 "Couldn't allocate buffer");
+
+        return buffer;
+    }
+
+    void Allocator::destroy_buffer(VkDevice device, AllocatedBuffer &buffer) const
+    {
+        if (buffer.buffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(m_allocator, buffer.buffer, buffer.allocation);
+            buffer.buffer     = VK_NULL_HANDLE;
+            buffer.allocation = VK_NULL_HANDLE;
+            buffer.size       = 0;
+        }
+    }
+    void *Allocator::map_buffer(AllocatedBuffer &buffer) const
+    {
+        void *data = nullptr;
+        vk_check(vmaMapMemory(m_allocator, buffer.allocation, &data), "Failed to map buffer");
+        return data;
+    }
+    void Allocator::unmap_buffer(AllocatedBuffer &buffer) const
+    {
+        vmaUnmapMemory(m_allocator, buffer.allocation);
+    }
+
     // endregion
 
     // region Format functions
@@ -706,6 +786,16 @@ namespace rg
                  "Failed to wait for fences");
     }
 
+    uint64_t Renderer::Data::get_current_frame_index() const
+    {
+        return current_frame_number % NB_OVERLAPPING_FRAMES;
+    }
+
+    FrameData &Renderer::Data::get_current_frame()
+    {
+        return frames[get_current_frame_index()];
+    }
+
     // endregion
 
     // region Swapchain functions
@@ -727,6 +817,10 @@ namespace rg
             vkDestroyImageView(device, swapchain.image_views[i], nullptr);
             swapchain.image_views[i] = VK_NULL_HANDLE;
         }
+
+        // Destroy swapchain
+        vkDestroySwapchainKHR(device, swapchain.vk_swapchain, nullptr);
+        swapchain.vk_swapchain = VK_NULL_HANDLE;
     }
 
     void Renderer::Data::destroy_swapchain(Swapchain &swapchain) const
@@ -734,15 +828,25 @@ namespace rg
         // If swapchain is disabled, then it is already destroyed and the contract is satisfied
         if (swapchain.enabled)
         {
-            destroy_swapchain_inner(swapchain);
+            // Unregister window events
+            swapchain.target_window->on_resize()->unsubscribe(swapchain.window_resize_event_handler_id);
 
-            // Destroy swapchain
-            vkDestroySwapchainKHR(device, swapchain.vk_swapchain, nullptr);
-            swapchain.vk_swapchain = VK_NULL_HANDLE;
+            // Destroy render stages
+            for (auto &stage : swapchain.render_stages) {
+                if (stage.indirect_buffer.is_valid())
+                {
+                    allocator.destroy_buffer(device, stage.indirect_buffer);
+                }
+            }
+
+            destroy_swapchain_inner(swapchain);
 
             // Destroy surface
             vkDestroySurfaceKHR(instance, swapchain.surface, nullptr);
             swapchain.surface = VK_NULL_HANDLE;
+
+            // Destroy pipelines
+            clear_pipelines(swapchain);
 
             // Disable it
             swapchain.enabled = false;
@@ -887,6 +991,403 @@ namespace rg
 
         // Create the new swapchain
         init_swapchain_inner(swapchain, new_extent);
+    }
+
+    // endregion
+
+    // region Effect functions
+
+    void Renderer::Data::build_out_of_date_effects(Swapchain &swapchain)
+    {
+        // The version is incremented when new effects are created.
+        if (swapchain.built_effects_version < effects_version)
+        {
+            // Build all effects
+            for (const auto &effect : shader_effects)
+            {
+                // Don't build a pipeline that is already built
+                const ShaderEffectId &effect_id = effect.key();
+                auto                  pipeline  = swapchain.pipelines.get(effect_id);
+
+                if (!pipeline.has_value())
+                {
+                    // Store the pipeline with the same id as the effect
+                    // That way, we can easily find the pipeline of a given effect
+                    swapchain.pipelines.set(effect_id, {.as_ptr = build_shader_effect(swapchain.viewport_extent, effect.value())});
+                }
+            }
+
+            // Update the version
+            swapchain.built_effects_version = effects_version;
+        }
+    }
+
+    VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect)
+    {
+        // This function will take the data contained in the effect and build a pipeline with it
+        // First, create all the structs we will need in the pipeline create info
+
+        // region Create shader stages
+
+        Array<VkPipelineShaderStageCreateInfo> stages(effect.shader_stages.count());
+        for (auto i = 0; i < effect.shader_stages.count(); i++)
+        {
+            // Get shader module
+            auto module = shader_modules.get(effect.shader_stages[i]);
+            check(module.has_value(), "Couldn't get shader module required to build effect.");
+
+            // Convert stage flag
+            VkShaderStageFlagBits stage_flags = {};
+            switch (module->stage)
+            {
+                case ShaderStage::VERTEX: stage_flags = VK_SHADER_STAGE_VERTEX_BIT; break;
+                case ShaderStage::FRAGMENT: stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT; break;
+                default: check(false, "Unknown shader stage");
+            }
+
+            // Create shader stage
+            stages[i] = {
+                .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext               = nullptr,
+                .flags               = 0,
+                .stage               = stage_flags,
+                .module              = module->module,
+                .pName               = "main",
+                .pSpecializationInfo = nullptr,
+            };
+        }
+
+        // endregion
+
+        // region Create vertex input state
+
+        // Default for now because we don't have vertex input
+        VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info = {
+            .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext                           = nullptr,
+            .flags                           = 0,
+            .vertexBindingDescriptionCount   = 0,
+            .pVertexBindingDescriptions      = nullptr,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions    = nullptr,
+        };
+
+        // endregion
+
+        // region Create input assembly state
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly_state_create_info = {
+            .sType                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext                  = nullptr,
+            .flags                  = 0,
+            .topology               = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = VK_FALSE,
+        };
+
+        // endregion
+
+        // region Create viewport state
+
+        VkViewport viewport = {
+            // Start in the corner
+            .x = 0.0f,
+            .y = 0.0f,
+            // Scale to the size of the window
+            .width  = static_cast<float>(viewport_extent.width),
+            .height = static_cast<float>(viewport_extent.height),
+            // Depth range is 0.0f to 1.0f
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f,
+        };
+
+        VkRect2D scissor = {
+            // Start in the corner
+            .offset = (VkOffset2D) {0, 0},
+            // Scale to the size of the window
+            .extent = viewport_extent,
+        };
+
+        VkPipelineViewportStateCreateInfo viewport_state_create_info = {
+            .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext         = nullptr,
+            .flags         = 0,
+            .viewportCount = 1,
+            .pViewports    = &viewport,
+            .scissorCount  = 1,
+            .pScissors     = &scissor,
+        };
+
+        // endregion
+
+        // region Create rasterization state
+
+        VkPipelineRasterizationStateCreateInfo rasterization_state_create_info = {
+            .sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext            = nullptr,
+            .flags            = 0,
+            .depthClampEnable = VK_FALSE,
+            // Keep the primitive in the rasterization stage
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode             = VK_POLYGON_MODE_FILL,
+            // No backface culling
+            .cullMode  = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            // No depth bias
+            .depthBiasEnable         = VK_FALSE,
+            .depthBiasConstantFactor = 0.0f,
+            .depthBiasClamp          = 0.0f,
+            .depthBiasSlopeFactor    = 0.0f,
+            // Width of the line
+            .lineWidth = 1.0f,
+        };
+
+        // endregion
+
+        // region Create multisample state
+
+        VkPipelineMultisampleStateCreateInfo multisample_state_create_info = {
+            .sType                 = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext                 = nullptr,
+            .flags                 = 0,
+            .rasterizationSamples  = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable   = VK_FALSE,
+            .minSampleShading      = 1.0f,
+            .pSampleMask           = nullptr,
+            .alphaToCoverageEnable = VK_FALSE,
+            .alphaToOneEnable      = VK_FALSE,
+        };
+
+        // endregion
+
+        // region Create color blend state
+
+        VkPipelineColorBlendAttachmentState color_blend_attachment_state = {
+            .blendEnable = VK_FALSE,
+            .colorWriteMask =
+                VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        // No blending
+        VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
+            .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext           = nullptr,
+            .flags           = 0,
+            .logicOpEnable   = VK_FALSE,
+            .logicOp         = VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments    = &color_blend_attachment_state,
+            .blendConstants  = {0.0f, 0.0f, 0.0f, 0.0f},
+        };
+
+        // endregion
+
+        // region Create depth stencil state
+
+        VkPipelineDepthStencilStateCreateInfo depth_stencil_state_create_info = {
+            .sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext                 = nullptr,
+            .flags                 = 0,
+            .depthTestEnable       = VK_FALSE,
+            .depthWriteEnable      = VK_FALSE,
+            .depthCompareOp        = VK_COMPARE_OP_ALWAYS,
+            .depthBoundsTestEnable = false,
+            .stencilTestEnable     = false,
+            .minDepthBounds        = 0.0f,
+            .maxDepthBounds        = 1.0f,
+        };
+
+        // endregion
+
+        // region Get render pass
+
+        VkRenderPass render_pass = VK_NULL_HANDLE;
+        switch (effect.render_stage_kind)
+        {
+            case RenderStageKind::GEOMETRY: render_pass = passes.geometry_pass; break;
+            case RenderStageKind::LIGHTING: render_pass = passes.lighting_pass; break;
+            default: check(false, "Invalid render stage kind");
+        }
+
+        // endregion
+
+        // region Create pipeline
+
+        VkGraphicsPipelineCreateInfo pipeline_create_info = {
+            .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext               = nullptr,
+            .flags               = 0,
+            .stageCount          = static_cast<uint32_t>(stages.count()),
+            .pStages             = stages.data(),
+            .pVertexInputState   = &vertex_input_state_create_info,
+            .pInputAssemblyState = &input_assembly_state_create_info,
+            .pTessellationState  = nullptr,
+            .pViewportState      = &viewport_state_create_info,
+            .pRasterizationState = &rasterization_state_create_info,
+            .pMultisampleState   = &multisample_state_create_info,
+            .pDepthStencilState  = &depth_stencil_state_create_info,
+            .pColorBlendState    = &color_blend_state_create_info,
+            .pDynamicState       = nullptr,
+            .layout              = effect.pipeline_layout,
+            .renderPass          = render_pass,
+            .subpass             = 0,
+            .basePipelineHandle  = VK_NULL_HANDLE,
+            .basePipelineIndex   = -1,
+        };
+        VkPipeline pipeline = VK_NULL_HANDLE;
+        vk_check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &pipeline),
+                 "Failed to create pipeline");
+
+        // endregion
+
+        return pipeline;
+    }
+
+    void Renderer::Data::clear_pipelines(Swapchain &swapchain) const
+    {
+        // Destroy all pipelines
+        for (auto pipeline : swapchain.pipelines)
+        {
+            vkDestroyPipeline(device, static_cast<VkPipeline>(pipeline.value.as_ptr), nullptr);
+        }
+
+        // Clear the map
+        swapchain.pipelines.clear();
+
+        // Reset the version
+        swapchain.built_effects_version = 0;
+    }
+
+    void Renderer::Data::recreate_pipelines(Swapchain &swapchain)
+    {
+        // Destroy all pipelines
+        clear_pipelines(swapchain);
+
+        // Build effects
+        build_out_of_date_effects(swapchain);
+    }
+
+    void Renderer::Data::destroy_pipeline(Swapchain &swapchain, ShaderEffectId effect_id) const
+    {
+        if (swapchain.enabled)
+        {
+            // Get the pipeline
+            auto pipeline = swapchain.pipelines.get(effect_id);
+            if (pipeline.has_value())
+            {
+                // Destroy the pipeline
+                vkDestroyPipeline(device, static_cast<VkPipeline>(pipeline.value()->as_ptr), nullptr);
+
+                // Remove the pipeline from the map
+                swapchain.pipelines.remove(effect_id);
+            }
+        }
+    }
+
+    // endregion
+
+    // region Stage functions
+
+    void Renderer::Data::update_stage_cache(Swapchain &swapchain)
+    {
+        // For each stage
+        for (auto &stage : swapchain.render_stages)
+        {
+            // Clear cache
+            stage.batches.clear();
+
+            // Find the model_ids using the materials using a template using an effect matching the stage
+            // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
+            // this will minimize the number of binds to do
+            Vector<ModelId> stage_models(10);
+
+            // For each effect
+            for (const auto &effect : shader_effects)
+            {
+                // If the effect supports that kind
+                if (effect.value().render_stage_kind == stage.kind)
+                {
+                    // Get the pipeline
+                    auto pipeline = swapchain.pipelines.get(effect.key());
+                    check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
+
+                    // For each material template
+                    for (const auto &mat_template : material_templates)
+                    {
+                        // If the template has that effect
+                        if (mat_template.value().shader_effects.includes(effect.key()))
+                        {
+                            // For each material
+                            // Note: if this becomes to computationally intensive, we could register materials in the template
+                            // like we do with the models
+                            for (const auto &material : materials)
+                            {
+                                // If the material has that template and there is at least one model to render
+                                if (material.value().template_id == mat_template.key()
+                                    && !material.value().models_using_material.is_empty())
+                                {
+                                    // Add a render batch
+                                    // Even though we could for now regroup them by shader effect instead of materials, this may
+                                    // change when we will add descriptor sets
+                                    // So we split batches by materials
+                                    // However, we won't bind a pipeline if it is the same as before, and batches are sorted by effect
+                                    stage.batches.push_back(RenderBatch {
+                                        models.count(),
+                                        material.value().models_using_material.size(),
+                                        static_cast<VkPipeline>(pipeline.value()->as_ptr),
+                                    });
+
+                                    // Add the models using that material
+                                    stage_models.extend(material.value().models_using_material);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If there is something to render
+            if (!stage_models.is_empty())
+            {
+                // Prepare draw indirect commands
+                const VkBufferUsageFlags indirect_buffer_usage =
+                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                const VmaMemoryUsage indirect_buffer_memory_usage  = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                const size_t         required_indirect_buffer_size = stage_models.size() * sizeof(VkDrawIndirectCommand);
+
+                // If it does not exist, create it
+                if (stage.indirect_buffer.buffer == VK_NULL_HANDLE)
+                {
+                    stage.indirect_buffer =
+                        allocator.create_buffer(required_indirect_buffer_size, indirect_buffer_usage, indirect_buffer_memory_usage);
+                }
+                // If it exists but isn't big enough, recreate it
+                else if (stage.indirect_buffer.size < required_indirect_buffer_size)
+                {
+                    allocator.destroy_buffer(device, stage.indirect_buffer);
+                    stage.indirect_buffer =
+                        allocator.create_buffer(required_indirect_buffer_size, indirect_buffer_usage, indirect_buffer_memory_usage);
+                }
+
+                // At this point, we have an indirect buffer big enough to hold the commands we want to register
+
+                // Register commands
+                auto *indirect_commands = static_cast<VkDrawIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
+
+                for (auto i = 0; i < stage_models.size(); ++i) {
+                    // Get model
+                    const auto model_id = stage_models[i];
+                    const auto model = models.get(model_id);
+                    check(model.has_value(), "Tried to draw a model that doesn't exist.");
+
+                    indirect_commands[i].vertexCount   = 3; // TODO when mesh is added
+                    indirect_commands[i].firstVertex   = 0;
+                    indirect_commands[i].instanceCount = 1; // TODO when instances are added
+                    indirect_commands[i].firstInstance = 0;
+                }
+
+                allocator.unmap_buffer(stage.indirect_buffer);
+            }
+        }
     }
 
     // endregion
@@ -1303,9 +1804,6 @@ namespace rg
         // Clear swapchains
         m_data->clear_swapchains();
 
-        // Destroy swapchains
-        m_data->swapchains.~Array();
-
         // Destroy render passes
         vkDestroyRenderPass(m_data->device, m_data->passes.geometry_pass, nullptr);
         vkDestroyRenderPass(m_data->device, m_data->passes.lighting_pass, nullptr);
@@ -1670,7 +2168,8 @@ namespace rg
     {
         // Since all models are going to be destroyed, none of them should still exist in the materials
         // We can then just clear the vectors for the same result, and it will be quicker
-        for (auto &mat : m_data->materials) {
+        for (auto &mat : m_data->materials)
+        {
             mat.value().models_using_material.clear();
         }
 
@@ -1704,7 +2203,8 @@ namespace rg
         {
             // Remove it from the model
             auto model_res = m_data->models.get(res.value().model_id);
-            check(model_res.has_value(), "Consistency error: model referenced in render node " + std::to_string(id) + " doesn't exist.");
+            check(model_res.has_value(),
+                  "Consistency error: model referenced in render node " + std::to_string(id) + " doesn't exist.");
             model_res->instances.remove(id);
 
             // Remove it from the renderer
@@ -1717,11 +2217,43 @@ namespace rg
     {
         // Since all render nodes will be destroyed, none of them should still exist in the models after the operation
         // This means that we can just clear the instance vectors, which will be faster
-        for (auto &model : m_data->models) {
+        for (auto &model : m_data->models)
+        {
             model.value().instances.clear();
         }
 
         m_data->render_nodes.clear();
+    }
+    // endregion
+
+    // region Drawing
+
+    void Renderer::draw()
+    {
+        // Get current frame
+        const uint64_t current_frame_index = m_data->get_current_frame_index();
+        FrameData     &current_frame       = m_data->frames[current_frame_index];
+
+        // Wait for the fence
+        //        m_data->wait_for_fence(current_frame.render_fence);
+
+        // For each enabled swapchain
+        for (auto &swapchain : m_data->swapchains)
+        {
+            if (swapchain.enabled)
+            {
+                // Update pipelines if needed
+                m_data->build_out_of_date_effects(swapchain);
+
+                // Update render stage cache
+                m_data->update_stage_cache(swapchain);
+
+
+            }
+        }
+
+        // Increment frame number
+        m_data->current_frame_number++;
     }
 
     // endregion

@@ -56,7 +56,7 @@ namespace rg
 
         // Push back
 
-        inline void push_back(T &value)
+        inline void push_back(const T &value)
         {
             T& slot = *static_cast<T*>(m_impl.push_slot());
             slot = value;
@@ -67,6 +67,28 @@ namespace rg
             // Same as above
             T& slot = *static_cast<T*>(m_impl.push_slot());
             slot = std::move(value);
+        }
+
+        // Extend
+
+        void extend(const Vector<T> &other)
+        {
+            ensure_capacity(m_impl.size() + other.m_impl.size());
+
+            for (size_t i = 0; i < other.m_impl.size(); i++)
+            {
+                push_back(other[i]);
+            }
+        }
+
+        void extend(Vector<T> &&other)
+        {
+            ensure_capacity(m_impl.size() + other.m_impl.size());
+
+            for (size_t i = 0; i < other.m_impl.size(); i++)
+            {
+                push_back(std::move(other[i]));
+            }
         }
 
         // Pop back

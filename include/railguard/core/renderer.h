@@ -148,6 +148,9 @@ namespace rg
          void destroy_render_node(RenderNodeId id);
          void clear_render_nodes();
 
+         // Rendering
+         void draw();
+
         ~Renderer();
     };
 } // namespace rg

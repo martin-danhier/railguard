@@ -131,6 +131,16 @@ namespace rg
             return m_data;
         }
 
+        // Other methods
+        bool includes(const T &value) const {
+            for (const auto &v : *this) {
+                if (v == value) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         // Iterator
         class Iterator
         {

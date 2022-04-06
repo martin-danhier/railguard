@@ -118,7 +118,9 @@ namespace rg
         if (m_data)
         {
             delete[] m_data->entries;
+            m_data->entries = nullptr;
             delete m_data;
+            m_data = nullptr;
         }
     }
 

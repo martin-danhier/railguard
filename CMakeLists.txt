@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  1)
-set(enable_ubsan 1)
+set(enable_asan  0)
+set(enable_ubsan 0)
 
 # Enable/disable interactivity
 # Setting this to 0 will add timers to ensure that no test is blocked in a loop, waiting for user input.
@@ -29,6 +29,10 @@ set(interactive 1)
 # Define C and C++ versions
 set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 20)
+
+# Shaders location
+set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders/")
+set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders/")
 
 # Enable tests
 enable_testing()
@@ -266,9 +270,6 @@ if (DEFINED RENDERER_VULKAN)
     )
 
     # Find shader files
-    set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders/")
-    set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders/")
-
     file(GLOB_RECURSE glsl_source_files
         "${shaders_directory}/*.frag"
         "${shaders_directory}/*.vert"

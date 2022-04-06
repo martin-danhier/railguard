@@ -38,30 +38,32 @@ namespace rg
         // Create renderer
         Renderer renderer(window, title, {0, 1, 0}, 2);
 
-        // Link window
-        renderer.connect_window(0, window);
-
-        // Load shaders
-        auto vertex_shader   = renderer.load_shader_module("resources/shaders/hello/test.vert.spv", ShaderStage::VERTEX);
-        auto fragment_shader = renderer.load_shader_module("resources/shaders/hello/test.frag.spv", ShaderStage::FRAGMENT);
-
-        // Create a shader effect
-        auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, RenderStageKind::LIGHTING);
-
-        // Create a material template
-        auto material_template = renderer.create_material_template({hello_effect});
-
-        // Create a material
-        auto material = renderer.create_material(material_template);
-
-        // Create a model
-        auto model = renderer.create_model(material);
-
-        // Create a render node
-        auto render_node = renderer.create_render_node(model);
-
         // Save data in engine
         m_data = new Data(std::move(window), std::move(renderer));
+
+        // Link window
+        // Once it is connected, we shouldn't move it: this could cause pointers to point to old memory
+        m_data->renderer.connect_window(0, m_data->window);
+
+        // Load shaders
+        auto vertex_shader   = m_data->renderer.load_shader_module("resources/shaders/hello/test.vert.spv", ShaderStage::VERTEX);
+        auto fragment_shader = m_data->renderer.load_shader_module("resources/shaders/hello/test.frag.spv", ShaderStage::FRAGMENT);
+
+        // Create a shader effect
+        auto hello_effect = m_data->renderer.create_shader_effect({vertex_shader, fragment_shader}, RenderStageKind::LIGHTING);
+
+        // Create a material template
+        auto material_template = m_data->renderer.create_material_template({hello_effect});
+
+        // Create a material
+        auto material = m_data->renderer.create_material(material_template);
+
+        // Create a model
+        auto model = m_data->renderer.create_model(material);
+
+        // Create a render node
+        auto render_node = m_data->renderer.create_render_node(model);
+
     }
 
     Engine::~Engine()
@@ -110,7 +112,7 @@ namespace rg
             m_data->window.handle_events();
 
             // Run rendering
-            // TODO
+            m_data->renderer.draw();
         }
     }
 } // namespace rg
