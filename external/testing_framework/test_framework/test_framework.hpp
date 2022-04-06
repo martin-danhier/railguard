@@ -38,9 +38,9 @@ bool tf_assert_equal(tf_context *context, size_t line_number, const char *file, 
     {
         std::string s = recoverable ? "Condition" : "Assertion";
         s += " failed. Expected: ";
-        s += std::to_string(expected);
+        s += expected;
         s += ", got: ";
-        s += std::to_string(actual);
+        s += actual;
         s += ".";
         s += recoverable ? "" : " Unable to continue execution.";
 

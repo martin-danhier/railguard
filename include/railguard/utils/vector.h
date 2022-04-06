@@ -3,6 +3,7 @@
 #include <railguard/utils/impl/vector_impl.h>
 
 #include <stdexcept>
+#include "optional.h"
 
 namespace rg
 {
@@ -180,6 +181,19 @@ namespace rg
             return true;
         }
 
+        Optional<size_t> index_of(const T &value) const
+        {
+            for (size_t i = 0; i < size(); i++)
+            {
+                const auto &val = *static_cast<T *>(m_impl.get_element(i));
+                if (val == value)
+                {
+                    return some<size_t>(i);
+                }
+            }
+            return none<size_t>();
+        }
+
         // iterator
         class iterator
         {
@@ -309,6 +323,16 @@ namespace rg
 
                 // We can now pop_back
                 pop_back();
+            }
+        }
+
+        void remove(const T &elem)
+        {
+            // Find the element
+            auto res = index_of(elem);
+            if (res.has_value())
+            {
+                remove_at(res.take());
             }
         }
     };

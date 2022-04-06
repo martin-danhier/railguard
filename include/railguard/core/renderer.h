@@ -6,6 +6,7 @@ namespace rg
 {
     // ---==== Forward declarations ====---
     class Window;
+    template<typename T> class Array;
 
     // ---==== Structs ====---
 
@@ -103,7 +104,49 @@ namespace rg
          * window capacity.
          * @param window Window that will be linked to the renderer.
          */
-         void connect_window(uint32_t window_slot_index, Window &window);
+        void connect_window(uint32_t window_slot_index, Window &window);
+
+        // Shader modules
+
+        /**
+         * Loads a shader from the given file. The language of the shader depends on the used backend.
+         * @param shader_path Path of the shader file.
+         * @param kind Kind of the shader.
+         * @return The id of the created shader.
+         */
+         ShaderModuleId load_shader_module(const char *shader_path, ShaderStage kind);
+         void destroy_shader_module(ShaderModuleId id);
+         void clear_shader_modules();
+
+         // Shader effects
+
+         ShaderEffectId create_shader_effect(const Array<ShaderModuleId>& stages, RenderStageKind render_stage_kind);
+         void destroy_shader_effect(ShaderEffectId id);
+         void clear_shader_effects();
+
+         // Material templates
+
+         MaterialTemplateId  create_material_template(const Array<ShaderEffectId> &available_effects);
+         void destroy_material_template(MaterialTemplateId id);
+         void clear_material_templates();
+
+         // Materials
+
+         MaterialId create_material(MaterialTemplateId material_template);
+         void destroy_material(MaterialId id);
+         void clear_materials();
+
+         // Models
+
+         ModelId create_model(MaterialId material);
+         void destroy_model(ModelId id);
+         void clear_models();
+
+         // Render node
+
+         RenderNodeId create_render_node(ModelId model);
+         void destroy_render_node(RenderNodeId id);
+         void clear_render_nodes();
 
         ~Renderer();
     };

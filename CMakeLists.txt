@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  0)
-set(enable_ubsan 0)
+set(enable_asan  1)
+set(enable_ubsan 1)
 
 # Enable/disable interactivity
 # Setting this to 0 will add timers to ensure that no test is blocked in a loop, waiting for user input.
@@ -44,6 +44,7 @@ set(railguard_lib_sources
     src/core/renderer/renderer_vulkan.cpp
     src/utils/vector_impl.cpp
     src/utils/hash_map.cpp
+    src/utils/io.cpp
     include/railguard/utils/array.h
     include/railguard/utils/map.h
     include/railguard/utils/vector.h
@@ -55,6 +56,11 @@ set(railguard_lib_sources
 # Add header directories for main lib
 set(railguard_lib_header_dir
     include
+)
+
+# Test resources
+set(test_resources
+    tests/resources/test.txt
 )
 
 ##################################################################
@@ -197,7 +203,7 @@ macro(add_unit_test)
 
     # Compile test
     message(STATUS "Generating test \"${TEST_NAME}\"")
-    add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE})
+    add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE} ${test_resources})
     target_sources(${TEST_NAME} PRIVATE tests/${TEST_FILE})
 
     # Set directory for executable
@@ -240,12 +246,14 @@ add_custom_target(
     DEPENDS ${TEST_NAMES}
 )
 
+# Copy test resources
+file(COPY ${test_resources} DESTINATION ${CMAKE_BINARY_DIR}/tests/resources)
 
 ##################################################################
 ###                     SHADER COMPILATION                     ###
 ##################################################################
 
-# Shaders need to be compiled in the renderering engine is Vulkan
+# Shaders need to be compiled if the rendering engine is Vulkan
 if (DEFINED RENDERER_VULKAN)
 
     # Get compiler
@@ -258,18 +266,27 @@ if (DEFINED RENDERER_VULKAN)
     )
 
     # Find shader files
+    set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders/")
+    set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders/")
+
     file(GLOB_RECURSE glsl_source_files
-        "${PROJECT_SOURCE_DIR}/resources/shaders/*.frag"
-        "${PROJECT_SOURCE_DIR}/resources/shaders/*.vert"
-        "${PROJECT_SOURCE_DIR}/resources/shaders/*.comp"
+        "${shaders_directory}/*.frag"
+        "${shaders_directory}/*.vert"
+        "${shaders_directory}/*.vert"
     )
 
     # Iterate each shader
     foreach(glsl ${glsl_source_files})
-        message(STATUS "Building shader")
         get_filename_component(file_name ${glsl} NAME)
-        set(spirv "${CMAKE_BINARY_DIR}/resources/shaders/${file_name}.spv")
-        message(STATUS ${glsl})
+
+        # Get relative path of shader in shaders directory
+        # Then place the spv file at the same location relatively
+        get_filename_component(file_path ${glsl} PATH)
+        string(REGEX REPLACE "^${shaders_directory}" "" file_path ${file_path})
+
+        message(STATUS "Registering shader \"${file_path}/${file_name}\"")
+
+        set(spirv "${spirv_directory}/${file_path}/${file_name}.spv")
 
         # Execute glslang command to compile that specific shader
         add_custom_command(

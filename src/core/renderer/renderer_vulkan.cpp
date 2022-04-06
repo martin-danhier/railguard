@@ -3,6 +3,7 @@
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
+#include <railguard/utils/io.h>
 #include <railguard/utils/storage.h>
 
 #include <iostream>
@@ -707,6 +708,8 @@ namespace rg
 
     // endregion
 
+    // region Swapchain functions
+
     void Renderer::Data::destroy_swapchain_inner(Swapchain &swapchain) const
     {
         // Destroy framebuffers
@@ -726,7 +729,6 @@ namespace rg
         }
     }
 
-    // region Swapchain functions
     void Renderer::Data::destroy_swapchain(Swapchain &swapchain) const
     {
         // If swapchain is disabled, then it is already destroyed and the contract is satisfied
@@ -885,8 +887,6 @@ namespace rg
 
         // Create the new swapchain
         init_swapchain_inner(swapchain, new_extent);
-
-        std::cout << "Swapchain recreated" << std::endl;
     }
 
     // endregion
@@ -1293,12 +1293,12 @@ namespace rg
         }
 
         // Clear storages
-        m_data->render_nodes.clear();
-        m_data->models.clear();
-        m_data->materials.clear();
-        m_data->material_templates.clear();
-        m_data->shader_effects.clear();
-        m_data->shader_modules.clear();
+        clear_render_nodes();
+        clear_models();
+        clear_materials();
+        clear_material_templates();
+        clear_shader_effects();
+        clear_shader_modules();
 
         // Clear swapchains
         m_data->clear_swapchains();
@@ -1451,6 +1451,280 @@ namespace rg
         // Enable it
         swapchain.enabled = true;
     }
+
+    // region Shader modules functions
+
+    ShaderModuleId Renderer::load_shader_module(const char *shader_path, ShaderStage kind)
+    {
+        // Load SPIR-V binary from file
+        size_t    code_size = 0;
+        uint32_t *code      = nullptr;
+        try
+        {
+            code = static_cast<uint32_t *>(load_binary_file(shader_path, &code_size));
+        }
+        catch (const std::exception &e)
+        {
+            // Always fail for now, later we can simply return invalid id (or let the exception propagate) to let the caller try to
+            // recover
+            check(false, "Could not load shader module: " + std::string(e.what()));
+        }
+
+        // Create shader vk module
+        VkShaderModuleCreateInfo shader_module_create_info {
+            .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext    = nullptr,
+            .flags    = 0,
+            .codeSize = code_size,
+            .pCode    = code,
+        };
+        VkShaderModule vk_shader_module;
+        vk_check(vkCreateShaderModule(m_data->device, &shader_module_create_info, nullptr, &vk_shader_module));
+
+        // Free code
+        delete[] code;
+
+        // Create the module
+        ShaderModule module {
+            .module = vk_shader_module,
+            .stage  = kind,
+        };
+
+        // Add it in the storage
+        auto id = m_data->shader_modules.push(module);
+
+        // Log
+        std::cout << "Loaded shader module " << id << ": " << shader_path << "\n";
+
+        // Return the id
+        return id;
+    }
+
+    void Renderer::destroy_shader_module(ShaderModuleId id)
+    {
+        // Lookup the module
+        auto res = m_data->shader_modules.get(id);
+        if (res.has_value())
+        {
+            vkDestroyShaderModule(m_data->device, res.value().module, nullptr);
+            m_data->shader_modules.remove(id);
+        }
+        // No value = already deleted, in a sense. This is not an error since the contract is respected
+    }
+
+    void Renderer::clear_shader_modules()
+    {
+        for (auto &module : m_data->shader_modules)
+        {
+            vkDestroyShaderModule(m_data->device, module.value().module, nullptr);
+        }
+        m_data->shader_modules.clear();
+    }
+
+    // endregion
+
+    // region Shader effect functions
+
+    ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind)
+    {
+        check(stages.count() > 0, "A shader effect must have at least one stage.");
+
+        // Create shader effect
+        ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
+
+        // Create pipeline layout
+        VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
+            .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext                  = nullptr,
+            .flags                  = 0,
+            .setLayoutCount         = 0,
+            .pSetLayouts            = nullptr,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges    = nullptr,
+        };
+        vk_check(vkCreatePipelineLayout(m_data->device, &pipeline_layout_create_info, nullptr, &effect.pipeline_layout),
+                 "Couldn't create pipeline layout");
+
+        // Store effect
+        auto id = m_data->shader_effects.push(std::move(effect));
+
+        // Increment version in the renderer so that swapchains know they have to rebuild pipelines
+        m_data->effects_version++;
+
+        return id;
+    }
+
+    void Renderer::destroy_shader_effect(ShaderEffectId id)
+    {
+        // Lookup the effect
+        auto res = m_data->shader_effects.get(id);
+        if (res.has_value())
+        {
+            vkDestroyPipelineLayout(m_data->device, res.value().pipeline_layout, nullptr);
+            m_data->shader_modules.remove(id);
+        }
+        // No value = already deleted, in a sense. This is not an error since the contract is respected
+    }
+    void Renderer::clear_shader_effects()
+    {
+        for (auto &effect : m_data->shader_effects)
+        {
+            vkDestroyPipelineLayout(m_data->device, effect.value().pipeline_layout, nullptr);
+        }
+        m_data->shader_effects.clear();
+    }
+
+    // endregion
+
+    // region Material template functions
+
+    MaterialTemplateId Renderer::create_material_template(const Array<ShaderEffectId> &available_effects)
+    {
+        check(available_effects.count() > 0, "A material template must have at least one effect.");
+
+        // Create material template
+        return m_data->material_templates.push({
+            available_effects,
+        });
+    }
+
+    void Renderer::destroy_material_template(MaterialTemplateId id)
+    {
+        // There is no special vulkan handle to destroy in the template, so we just let the storage do its job
+        m_data->material_templates.remove(id);
+    }
+
+    void Renderer::clear_material_templates()
+    {
+        // Same here
+        m_data->material_templates.clear();
+    }
+
+    // endregion
+
+    // region Material functions
+
+    MaterialId Renderer::create_material(MaterialTemplateId material_template)
+    {
+        check(material_template != NULL_ID, "A material must have a template.");
+
+        // Create material
+        return m_data->materials.push({
+            material_template,
+            Vector<ModelId>(10),
+        });
+    }
+
+    void Renderer::destroy_material(MaterialId id)
+    {
+        // There is no special vulkan handle to destroy in the material, so we just let the storage do its job
+        m_data->materials.remove(id);
+    }
+
+    void Renderer::clear_materials()
+    {
+        // Same here
+        m_data->materials.clear();
+    }
+
+    // endregion
+
+    // region Model functions
+
+    ModelId Renderer::create_model(MaterialId material)
+    {
+        check(material != NULL_ID, "A model must have a material.");
+
+        // Create model
+        auto model_id = m_data->models.push({
+            material,
+            Vector<RenderNodeId>(10),
+        });
+
+        // Register it in the material
+        auto mat = m_data->materials.get(material);
+        check(mat.has_value(), "Material doesn't exist.");
+        mat->models_using_material.push_back(model_id);
+
+        return model_id;
+    }
+
+    void Renderer::destroy_model(ModelId id)
+    {
+        // Lookup the model
+        auto res = m_data->models.get(id);
+        if (res.has_value())
+        {
+            // Remove it from the material
+            auto mat = m_data->materials.get(res.value().material_id);
+            check(mat.has_value(), "Consistency error: material referenced in model " + std::to_string(id) + " doesn't exist.");
+            mat->models_using_material.remove(id);
+
+            // Remove it from the renderer
+            m_data->models.remove(id);
+        }
+        // No value = already deleted, in a sense. This is not an error since the contract is respected
+    }
+
+    void Renderer::clear_models()
+    {
+        // Since all models are going to be destroyed, none of them should still exist in the materials
+        // We can then just clear the vectors for the same result, and it will be quicker
+        for (auto &mat : m_data->materials) {
+            mat.value().models_using_material.clear();
+        }
+
+        m_data->models.clear();
+    }
+
+    // endregion
+
+    // region Render nodes functions
+
+    RenderNodeId Renderer::create_render_node(ModelId model)
+    {
+        check(model != NULL_ID, "A render node must have a model.");
+
+        // Create render node
+        auto node_id = m_data->render_nodes.push({model});
+
+        // Register it in the model
+        auto model_res = m_data->models.get(model);
+        check(model_res.has_value(), "Model doesn't exist.");
+        model_res->instances.push_back(node_id);
+
+        return node_id;
+    }
+
+    void Renderer::destroy_render_node(RenderNodeId id)
+    {
+        // Lookup the render node
+        auto res = m_data->render_nodes.get(id);
+        if (res.has_value())
+        {
+            // Remove it from the model
+            auto model_res = m_data->models.get(res.value().model_id);
+            check(model_res.has_value(), "Consistency error: model referenced in render node " + std::to_string(id) + " doesn't exist.");
+            model_res->instances.remove(id);
+
+            // Remove it from the renderer
+            m_data->render_nodes.remove(id);
+        }
+        // No value = already deleted, in a sense. This is not an error since the contract is respected
+    }
+
+    void Renderer::clear_render_nodes()
+    {
+        // Since all render nodes will be destroyed, none of them should still exist in the models after the operation
+        // This means that we can just clear the instance vectors, which will be faster
+        for (auto &model : m_data->models) {
+            model.value().instances.clear();
+        }
+
+        m_data->render_nodes.clear();
+    }
+
+    // endregion
 
 } // namespace rg
 #endif

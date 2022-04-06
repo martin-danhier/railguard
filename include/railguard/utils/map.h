@@ -21,6 +21,8 @@ namespace rg
             Key m_key;
 
           public:
+            friend class Map;
+
             Entry(const Key &key, const T &value) : m_key(key), m_value(value)
             {
             }
@@ -119,12 +121,12 @@ namespace rg
 
             if (res.has_value())
             {
-                m_storage[res.value()->as_size].m_data = value;
+                m_storage[res.value()->as_size].m_value = value;
             }
             else
             {
                 auto index = m_storage.size();
-                m_storage.push_back(Entry {value, key});
+                m_storage.push_back(Entry {key, value});
                 m_hash_map.set(key, HashMap::Value {index});
             }
         }
