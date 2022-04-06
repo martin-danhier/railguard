@@ -41,6 +41,11 @@ namespace rg
             return m_map.get(id);
         }
 
+        OptionalPtr<const T> get(Id id) const
+        {
+            return m_map.get(id);
+        }
+
         T &operator[](Id id)
         {
             return get(id).expect("No element with id " + std::to_string(id) + ".");
@@ -116,12 +121,12 @@ namespace rg
             }
         };
 
-        [[nodiscard]] Iterator begin()
+        [[nodiscard]] Iterator begin() const
         {
             return Iterator(m_map.begin());
         }
 
-        [[nodiscard]] Iterator end()
+        [[nodiscard]] Iterator end() const
         {
             return Iterator(m_map.end());
         }

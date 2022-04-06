@@ -1,4 +1,4 @@
-#include "railguard/core/engine.h"
+#include "railguard/core/triangle.h"
 
 #include <railguard/core/renderer.h>
 #include <railguard/core/window.h>
@@ -44,26 +44,6 @@ namespace rg
         // Link window
         // Once it is connected, we shouldn't move it: this could cause pointers to point to old memory
         m_data->renderer.connect_window(0, m_data->window);
-
-        // Load shaders
-        auto vertex_shader   = m_data->renderer.load_shader_module("resources/shaders/hello/test.vert.spv", ShaderStage::VERTEX);
-        auto fragment_shader = m_data->renderer.load_shader_module("resources/shaders/hello/test.frag.spv", ShaderStage::FRAGMENT);
-
-        // Create a shader effect
-        auto hello_effect = m_data->renderer.create_shader_effect({vertex_shader, fragment_shader}, RenderStageKind::LIGHTING);
-
-        // Create a material template
-        auto material_template = m_data->renderer.create_material_template({hello_effect});
-
-        // Create a material
-        auto material = m_data->renderer.create_material(material_template);
-
-        // Create a model
-        auto model = m_data->renderer.create_model(material);
-
-        // Create a render node
-        auto render_node = m_data->renderer.create_render_node(model);
-
     }
 
     Engine::~Engine()
@@ -114,5 +94,21 @@ namespace rg
             // Run rendering
             m_data->renderer.draw();
         }
+    }
+
+    Renderer &Engine::renderer() const
+    {
+        if (m_data == nullptr) {
+            throw std::runtime_error("Engine not initialized.");
+        }
+        return m_data->renderer;
+    }
+
+    Window &Engine::window() const
+    {
+        if (m_data == nullptr) {
+            throw std::runtime_error("Engine not initialized.");
+        }
+        return m_data->window;
     }
 } // namespace rg

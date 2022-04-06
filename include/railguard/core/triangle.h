@@ -2,6 +2,9 @@
 
 namespace rg
 {
+    class Renderer;
+    class Window;
+
     class Engine
     {
       private:
@@ -11,6 +14,10 @@ namespace rg
       public:
         Engine();
         ~Engine();
+
+        // Getters
+        [[nodiscard]] Renderer &renderer() const;
+        [[nodiscard]] Window &window() const;
 
         void run_main_loop();
     };

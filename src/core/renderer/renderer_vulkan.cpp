@@ -34,7 +34,10 @@ namespace rg
         VkBuffer      buffer     = VK_NULL_HANDLE;
         uint32_t      size       = 0;
 
-        [[nodiscard]] inline bool is_valid() const { return allocation != VK_NULL_HANDLE; }
+        [[nodiscard]] inline bool is_valid() const
+        {
+            return allocation != VK_NULL_HANDLE;
+        }
     };
 
     struct AllocatedImage
@@ -223,10 +226,13 @@ namespace rg
 
         // ------------ Methods ------------
 
-        inline void                   wait_for_fence(VkFence fence) const;
-        inline void                   wait_for_all_fences() const;
-        [[nodiscard]] inline uint64_t get_current_frame_index() const;
-        inline FrameData             &get_current_frame();
+        inline void                           wait_for_fence(VkFence fence) const;
+        inline void                           wait_for_all_fences() const;
+        [[nodiscard]] inline uint64_t         get_current_frame_index() const;
+        inline FrameData                     &get_current_frame();
+        [[nodiscard]] inline const FrameData &get_current_frame() const;
+        VkCommandBuffer                       begin_recording();
+        void                                  end_recording_and_submit();
 
         [[nodiscard]] VkSurfaceFormatKHR select_surface_format(const VkSurfaceKHR &surface) const;
         void                             destroy_swapchain_inner(Swapchain &swapchain) const;
@@ -234,12 +240,13 @@ namespace rg
         void                             clear_swapchains();
         void                             init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const;
         void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const;
+        uint32_t                         get_next_swapchain_image(Swapchain &swapchain) const;
 
-        VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect);
-        void       build_out_of_date_effects(Swapchain &swapchain);
-        void       clear_pipelines(Swapchain &swapchain) const;
-        void       recreate_pipelines(Swapchain &swapchain);
-        void       destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
+        [[nodiscard]] VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const;
+        void                     build_out_of_date_effects(Swapchain &swapchain) const;
+        void                     clear_pipelines(Swapchain &swapchain) const;
+        void                     recreate_pipelines(Swapchain &swapchain) const;
+        void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
 
         void update_stage_cache(Swapchain &swapchain);
     };
@@ -257,6 +264,7 @@ namespace rg
             case VK_SUCCESS: return "VK_SUCCESS";
             case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
             case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
+            case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
             case VK_TIMEOUT: return "VK_TIMEOUT";
             default: return std::to_string(result);
         }
@@ -276,7 +284,13 @@ namespace rg
 
     void vk_check(VkResult result, const std::string &error_message = "")
     {
-        if (result != VK_SUCCESS)
+        // Warnings
+        if (result == VK_SUBOPTIMAL_KHR)
+        {
+            std::cout << "[Vulkan Warning] A Vulkan function call returned VkResult = " << vk_result_to_string(result) << "\n";
+        }
+        // Errors
+        else if (result != VK_SUCCESS)
         {
             // Pretty print error
             std::cerr << "[Vulkan Error] A Vulkan function call returned VkResult = " << vk_result_to_string(result) << "\n";
@@ -796,6 +810,54 @@ namespace rg
         return frames[get_current_frame_index()];
     }
 
+    const FrameData &Renderer::Data::get_current_frame() const
+    {
+        return frames[get_current_frame_index()];
+    }
+
+    VkCommandBuffer Renderer::Data::begin_recording()
+    {
+        // Get current frame
+        auto &frame = get_current_frame();
+
+        // Reset command buffer
+        vk_check(vkResetCommandBuffer(frame.command_buffer, 0));
+
+        // Begin command buffer
+        VkCommandBufferBeginInfo begin_info = {};
+        begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vk_check(vkBeginCommandBuffer(frame.command_buffer, &begin_info));
+
+        return frame.command_buffer;
+    }
+
+    void Renderer::Data::end_recording_and_submit()
+    {
+        // Get current frame
+        auto &frame = get_current_frame();
+
+        // End command buffer
+        vk_check(vkEndCommandBuffer(frame.command_buffer));
+
+        // Submit command buffer
+        VkPipelineStageFlags wait_stage  = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkSubmitInfo         submit_info = {};
+        submit_info.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount   = 1;
+        submit_info.pCommandBuffers      = &frame.command_buffer;
+        submit_info.pWaitDstStageMask    = &wait_stage;
+        // Wait until the image to render is ready
+        submit_info.waitSemaphoreCount = 1;
+        submit_info.pWaitSemaphores    = &frame.present_semaphore;
+        // Signal the render semaphore when the rendering is done
+        submit_info.signalSemaphoreCount = 1;
+        submit_info.pSignalSemaphores    = &frame.render_semaphore;
+
+        // Submit
+        vk_check(vkQueueSubmit(graphics_queue.queue, 1, &submit_info, frame.render_fence), "Failed to submit command buffer");
+    }
+
     // endregion
 
     // region Swapchain functions
@@ -832,7 +894,8 @@ namespace rg
             swapchain.target_window->on_resize()->unsubscribe(swapchain.window_resize_event_handler_id);
 
             // Destroy render stages
-            for (auto &stage : swapchain.render_stages) {
+            for (auto &stage : swapchain.render_stages)
+            {
                 if (stage.indirect_buffer.is_valid())
                 {
                     allocator.destroy_buffer(device, stage.indirect_buffer);
@@ -991,13 +1054,43 @@ namespace rg
 
         // Create the new swapchain
         init_swapchain_inner(swapchain, new_extent);
+
+        // Recreate pipelines
+        recreate_pipelines(swapchain);
+    }
+
+    uint32_t Renderer::Data::get_next_swapchain_image(Swapchain &swapchain) const
+    {
+        const auto &frame = get_current_frame();
+
+        // Get next image
+        uint32_t image_index = 0;
+        auto     result      = vkAcquireNextImageKHR(device,
+                                            swapchain.vk_swapchain,
+                                            SEMAPHORE_TIMEOUT,
+                                            frame.present_semaphore,
+                                            VK_NULL_HANDLE,
+                                            &image_index);
+
+        // When the window resizes, the function waits for fences before recreating the swapchain
+        // The last few frames may thus be suboptimal
+        // We decide to still render them (suboptimal still works),
+        // so we ignore the warning (we know it will be handled in one or two frames)
+        // If this is an issue in the future, maybe the function could return an optional, which would be none in this case
+        // And skip frames that returned none.
+        if (result != VK_SUBOPTIMAL_KHR)
+        {
+            vk_check(result);
+        }
+
+        return image_index;
     }
 
     // endregion
 
     // region Effect functions
 
-    void Renderer::Data::build_out_of_date_effects(Swapchain &swapchain)
+    void Renderer::Data::build_out_of_date_effects(Swapchain &swapchain) const
     {
         // The version is incremented when new effects are created.
         if (swapchain.built_effects_version < effects_version)
@@ -1022,7 +1115,7 @@ namespace rg
         }
     }
 
-    VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect)
+    VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const
     {
         // This function will take the data contained in the effect and build a pipeline with it
         // First, create all the structs we will need in the pipeline create info
@@ -1033,7 +1126,7 @@ namespace rg
         for (auto i = 0; i < effect.shader_stages.count(); i++)
         {
             // Get shader module
-            auto module = shader_modules.get(effect.shader_stages[i]);
+            const auto &module = shader_modules.get(effect.shader_stages[i]);
             check(module.has_value(), "Couldn't get shader module required to build effect.");
 
             // Convert stage flag
@@ -1257,7 +1350,7 @@ namespace rg
         swapchain.built_effects_version = 0;
     }
 
-    void Renderer::Data::recreate_pipelines(Swapchain &swapchain)
+    void Renderer::Data::recreate_pipelines(Swapchain &swapchain) const
     {
         // Destroy all pipelines
         clear_pipelines(swapchain);
@@ -1331,7 +1424,7 @@ namespace rg
                                     // So we split batches by materials
                                     // However, we won't bind a pipeline if it is the same as before, and batches are sorted by effect
                                     stage.batches.push_back(RenderBatch {
-                                        models.count(),
+                                        stage_models.size(),
                                         material.value().models_using_material.size(),
                                         static_cast<VkPipeline>(pipeline.value()->as_ptr),
                                     });
@@ -1373,10 +1466,11 @@ namespace rg
                 // Register commands
                 auto *indirect_commands = static_cast<VkDrawIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
 
-                for (auto i = 0; i < stage_models.size(); ++i) {
+                for (auto i = 0; i < stage_models.size(); ++i)
+                {
                     // Get model
                     const auto model_id = stage_models[i];
-                    const auto model = models.get(model_id);
+                    const auto model    = models.get(model_id);
                     check(model.has_value(), "Tried to draw a model that doesn't exist.");
 
                     indirect_commands[i].vertexCount   = 3; // TODO when mesh is added
@@ -1387,6 +1481,28 @@ namespace rg
 
                 allocator.unmap_buffer(stage.indirect_buffer);
             }
+        }
+    }
+
+    void draw_from_cache(const RenderStage &stage, VkCommandBuffer cmd)
+    {
+        constexpr uint32_t draw_stride    = sizeof(VkDrawIndirectCommand);
+        VkPipeline         bound_pipeline = VK_NULL_HANDLE;
+
+        // For each batch
+        for (const auto &batch : stage.batches)
+        {
+            // If the pipeline is different from the last one, bind it
+            if (bound_pipeline != batch.pipeline)
+            {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, batch.pipeline);
+                bound_pipeline = batch.pipeline;
+            }
+
+            // Draw the batch
+            const uint32_t &&draw_offset = draw_stride * batch.offset;
+
+            vkCmdDrawIndirect(cmd, stage.indirect_buffer.buffer, draw_offset, batch.count, draw_stride);
         }
     }
 
@@ -2235,7 +2351,7 @@ namespace rg
         FrameData     &current_frame       = m_data->frames[current_frame_index];
 
         // Wait for the fence
-        //        m_data->wait_for_fence(current_frame.render_fence);
+        m_data->wait_for_fence(current_frame.render_fence);
 
         // For each enabled swapchain
         for (auto &swapchain : m_data->swapchains)
@@ -2248,7 +2364,52 @@ namespace rg
                 // Update render stage cache
                 m_data->update_stage_cache(swapchain);
 
+                // Begin recording
+                m_data->begin_recording();
 
+                // Get next image
+                auto image_index = m_data->get_next_swapchain_image(swapchain);
+
+                // Geometric pass TODO
+
+                // Lighting pass
+                VkClearValue clear_value = {
+                    .color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}},
+                };
+                VkRenderPassBeginInfo render_pass_begin_info = {
+                    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                    .pNext = nullptr,
+                    // Render pass
+                    .renderPass = m_data->passes.lighting_pass,
+                    // Link framebuffer
+                    .framebuffer = swapchain.framebuffers[image_index],
+                    // Render area
+                    .renderArea = {.offset = {0, 0}, .extent = swapchain.viewport_extent},
+                    // Clear values
+                    .clearValueCount = 1,
+                    .pClearValues    = &clear_value,
+                };
+                vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+                // Draw
+                draw_from_cache(swapchain.render_stages[1], current_frame.command_buffer);
+
+                vkCmdEndRenderPass(current_frame.command_buffer);
+
+                // End recording and submit
+                m_data->end_recording_and_submit();
+
+                // Present
+                VkPresentInfoKHR present_info = {
+                    .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                    .pNext              = nullptr,
+                    .waitSemaphoreCount = 1,
+                    .pWaitSemaphores    = &current_frame.render_semaphore,
+                    .swapchainCount     = 1,
+                    .pSwapchains        = &swapchain.vk_swapchain,
+                    .pImageIndices      = &image_index,
+                };
+                vkQueuePresentKHR(m_data->graphics_queue.queue, &present_info);
             }
         }
 
