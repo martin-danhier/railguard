@@ -28,10 +28,10 @@ namespace rg
     class Window
     {
       private:
-        // Obscure struct to hold data - allows different implementations as in C
+        // Obscure struct to hold m_data - allows different implementations as in C
         struct Data;
 
-        // Pointer to the data
+        // Pointer to the m_data
         Data *m_data = nullptr;
 
       public:

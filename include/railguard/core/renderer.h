@@ -6,7 +6,10 @@ namespace rg
 {
     // ---==== Forward declarations ====---
     class Window;
-    template<typename T> class Array;
+    template<typename T>
+    class Array;
+
+    struct Transform;
 
     // ---==== Structs ====---
 
@@ -37,6 +40,12 @@ namespace rg
         FRAGMENT = 2,
     };
 
+    enum class CameraType
+    {
+        PERSPECTIVE  = 0,
+        ORTHOGRAPHIC = 1,
+    };
+
     /** An association of the shader and its kind. */
     struct ShaderModule;
 
@@ -57,6 +66,13 @@ namespace rg
     /** Instance of a model */
     struct RenderNode;
 
+    /**
+     * A camera symbolizes the view of the world from which the scene is rendered.
+     * It is the camera which defines the projection type (orthographic, perspective, etc.), and the viewport.
+     * A camera can either render to a window or to a texture.
+     * */
+    struct Camera;
+
     // Define aliases for the storage id, that way it is more intuitive to know what the id is referring to.
     constexpr static uint64_t NULL_ID = 0;
     using ShaderModuleId              = uint64_t;
@@ -65,11 +81,12 @@ namespace rg
     using MaterialId                  = uint64_t;
     using ModelId                     = uint64_t;
     using RenderNodeId                = uint64_t;
+    using CameraId                    = uint64_t;
 
     // ---==== Main classes ====---
 
     /**
-     * The renderer is an opaque struct that contains all of the data used for rendering.
+     * The renderer is an opaque struct that contains all of the m_data used for rendering.
      * It exact contents depend on the used graphics API, which is why it is opaque an only handled with pointers.
      *
      * The renderer is used in all functions that concern the rendering.
@@ -114,42 +131,72 @@ namespace rg
          * @param kind Kind of the shader.
          * @return The id of the created shader.
          */
-         ShaderModuleId load_shader_module(const char *shader_path, ShaderStage kind);
-         void destroy_shader_module(ShaderModuleId id);
-         void clear_shader_modules();
+        ShaderModuleId load_shader_module(const char *shader_path, ShaderStage kind);
+        void           destroy_shader_module(ShaderModuleId id);
+        void           clear_shader_modules();
 
-         // Shader effects
+        // Shader effects
 
-         ShaderEffectId create_shader_effect(const Array<ShaderModuleId>& stages, RenderStageKind render_stage_kind);
-         void destroy_shader_effect(ShaderEffectId id);
-         void clear_shader_effects();
+        ShaderEffectId create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind);
+        void           destroy_shader_effect(ShaderEffectId id);
+        void           clear_shader_effects();
 
-         // Material templates
+        // Material templates
 
-         MaterialTemplateId  create_material_template(const Array<ShaderEffectId> &available_effects);
-         void destroy_material_template(MaterialTemplateId id);
-         void clear_material_templates();
+        MaterialTemplateId create_material_template(const Array<ShaderEffectId> &available_effects);
+        void               destroy_material_template(MaterialTemplateId id);
+        void               clear_material_templates();
 
-         // Materials
+        // Materials
 
-         MaterialId create_material(MaterialTemplateId material_template);
-         void destroy_material(MaterialId id);
-         void clear_materials();
+        MaterialId create_material(MaterialTemplateId material_template);
+        void       destroy_material(MaterialId id);
+        void       clear_materials();
 
-         // Models
+        // Models
 
-         ModelId create_model(MaterialId material);
-         void destroy_model(ModelId id);
-         void clear_models();
+        ModelId create_model(MaterialId material);
+        void    destroy_model(ModelId id);
+        void    clear_models();
 
-         // Render node
+        // Render node
 
-         RenderNodeId create_render_node(ModelId model);
-         void destroy_render_node(RenderNodeId id);
-         void clear_render_nodes();
+        RenderNodeId create_render_node(ModelId model);
+        void         destroy_render_node(RenderNodeId id);
+        void         clear_render_nodes();
 
-         // Rendering
-         void draw();
+        // Cameras
+        CameraId create_orthographic_camera(uint32_t window_index, float near, float far);
+        CameraId create_orthographic_camera(uint32_t window_index, float width, float height, float near, float far);
+        CameraId create_orthographic_camera(uint32_t         window_index,
+                                            float            width,
+                                            float            height,
+                                            float            near,
+                                            float            far,
+                                            const Transform &transform);
+
+        CameraId create_perspective_camera(uint32_t window_index, float fov, float near, float far);
+        CameraId create_perspective_camera(uint32_t window_index, float fov, float aspect, float near, float far);
+        CameraId create_perspective_camera(uint32_t         window_index,
+                                           float            fov,
+                                           float            aspect,
+                                           float            near,
+                                           float            far,
+                                           const Transform &transform);
+
+        void remove_camera(CameraId id);
+
+        [[nodiscard]] const Transform &get_camera_transform(CameraId id) const;
+        Transform                     &get_camera_transform(CameraId id);
+
+        [[nodiscard]] CameraType get_camera_type(CameraId id) const;
+
+        void               disable_camera(CameraId id);
+        void               enable_camera(CameraId id);
+        [[nodiscard]] bool is_camera_enabled(CameraId id) const;
+
+        // Rendering
+        void draw();
 
         ~Renderer();
     };

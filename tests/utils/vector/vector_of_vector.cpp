@@ -10,7 +10,7 @@ TEST
     // Create sub vector with && rvalue
     v.push_back(rg::Vector<int>(3));
 
-    // We should be able to push data into it
+    // We should be able to push m_data into it
     v[0].push_back(1);
     v[0].push_back(3);
 

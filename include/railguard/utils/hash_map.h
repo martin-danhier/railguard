@@ -17,7 +17,7 @@ namespace rg
      * A hash map stores a set of key-value pairs. Unlike most languages, both the key and the value are 64-bit integers.
      *
      * In particular, the value is as long as a size_t, meaning it can store an index or a pointer. This is useful in combination with
-     * a vector to store actual data. See the StructMap for an implementation of this.
+     * a vector to store actual m_data. See the StructMap for an implementation of this.
      */
     class HashMap
     {

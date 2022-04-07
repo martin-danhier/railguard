@@ -46,7 +46,7 @@ VectorImpl::VectorImpl(VectorImpl &&other) noexcept
       m_data(other.m_data),
       m_growth_amount(other.m_growth_amount)
 {
-    // Take the other's data without copying
+    // Take the other's m_data without copying
     // To prevent the other from freeing it, we set it to nullptr
     other.m_data = nullptr;
 }
@@ -63,10 +63,10 @@ VectorImpl &VectorImpl::operator=(const VectorImpl &other)
         throw std::runtime_error("Attempted to copy an invalid vector");
     }
 
-    // Free old data
+    // Free old m_data
     delete[] m_data;
 
-    // Copy new data
+    // Copy new m_data
     m_capacity     = other.m_capacity;
     m_element_size = other.m_element_size;
     m_count        = other.m_count;
@@ -83,10 +83,10 @@ VectorImpl &VectorImpl::operator=(VectorImpl &&other) noexcept
     if (this == &other)
         return *this;
 
-    // Free old data
+    // Free old m_data
     delete[] m_data;
 
-    // Take the other's data without copying
+    // Take the other's m_data without copying
     // To prevent the other from freeing it, we set it to nullptr
     m_capacity      = other.m_capacity;
     m_element_size  = other.m_element_size;
@@ -129,7 +129,7 @@ void VectorImpl::ensure_capacity(size_t required_minimum_capacity)
 
         // Create new buffer
         char *new_data = new char[new_capacity * m_element_size];
-        // Copy old data to new buffer
+        // Copy old m_data to new buffer
         memcpy(new_data, m_data, m_count * m_element_size);
         // Delete old buffer
         delete[] m_data;

@@ -92,7 +92,7 @@ namespace rg
         }
     };
 
-    /** Optional variant that doesn't hold the data itself, but a pointer to it. */
+    /** Optional variant that doesn't hold the m_data itself, but a pointer to it. */
     template<typename T> class OptionalPtr {
       private:
         Optional<T*> m_optional;

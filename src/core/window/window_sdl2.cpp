@@ -17,7 +17,7 @@ using namespace rg;
 
 // --==== TYPES ====--
 
-// Define obscure struct that holds data
+// Define obscure struct that holds m_data
 struct Window::Data
 {
     SDL_Window *sdl_window = nullptr;

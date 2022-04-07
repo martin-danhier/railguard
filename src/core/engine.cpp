@@ -1,4 +1,4 @@
-#include "railguard/core/triangle.h"
+#include "railguard/core/engine.h"
 
 #include <railguard/core/renderer.h>
 #include <railguard/core/window.h>
@@ -38,7 +38,7 @@ namespace rg
         // Create renderer
         Renderer renderer(window, title, {0, 1, 0}, 2);
 
-        // Save data in engine
+        // Save m_data in engine
         m_data = new Data(std::move(window), std::move(renderer));
 
         // Link window

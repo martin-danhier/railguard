@@ -1,9 +1,9 @@
 #pragma once
 
 #include <railguard/utils/impl/vector_impl.h>
+#include <railguard/utils/optional.h>
 
 #include <stdexcept>
-#include "optional.h"
 
 namespace rg
 {
@@ -58,15 +58,15 @@ namespace rg
 
         inline void push_back(const T &value)
         {
-            T& slot = *static_cast<T*>(m_impl.push_slot());
-            slot = value;
+            T &slot = *static_cast<T *>(m_impl.push_slot());
+            slot    = value;
         }
 
         inline void push_back(T &&value)
         {
             // Same as above
-            T& slot = *static_cast<T*>(m_impl.push_slot());
-            slot = std::move(value);
+            T &slot = *static_cast<T *>(m_impl.push_slot());
+            slot    = std::move(value);
         }
 
         // Extend
@@ -181,7 +181,8 @@ namespace rg
          * @return true if it worked, false otherwise
          * @example With an array comparison, it would look like: arr[dst_pos] = arr[src_pos]
          */
-        bool copy(size_t src_pos, size_t dst_pos) {
+        bool copy(size_t src_pos, size_t dst_pos)
+        {
             if (src_pos >= size() || dst_pos >= size())
             {
                 // The indexes must be valid
@@ -194,8 +195,8 @@ namespace rg
                 return true;
             }
 
-            T& src_slot = *static_cast<T *>(m_impl.get_element(src_pos));
-            T& dst_slot = *static_cast<T *>(m_impl.get_element(dst_pos));
+            T &src_slot = *static_cast<T *>(m_impl.get_element(src_pos));
+            T &dst_slot = *static_cast<T *>(m_impl.get_element(dst_pos));
 
             // Do the copy
             // The "copy" operator should be called
@@ -220,22 +221,23 @@ namespace rg
         class iterator
         {
           private:
-            T* m_ptr;
-            size_t m_index;
+            T                       *m_ptr;
+            size_t                   m_index;
             const _impl::VectorImpl *m_impl;
-          public:
 
+          public:
             // Traits
-            using difference_type = ptrdiff_t;
-            using value_type = T;
-            using pointer = value_type *;
-            using reference = value_type &;
+            using difference_type   = ptrdiff_t;
+            using value_type        = T;
+            using pointer           = value_type *;
+            using reference         = value_type &;
             using iterator_category = std::bidirectional_iterator_tag;
 
-            iterator(const Vector &vec, size_t startIndex): m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl) {
+            iterator(const Vector &vec, size_t startIndex) : m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl)
+            {
                 if (m_impl->is_valid() && m_index < m_impl->size())
                 {
-                    m_ptr = static_cast<T*>(m_impl->get_element(m_index));
+                    m_ptr = static_cast<T *>(m_impl->get_element(m_index));
                 }
             }
 
@@ -294,7 +296,6 @@ namespace rg
             {
                 return m_ptr;
             }
-
         };
 
         iterator begin() const
@@ -323,7 +324,8 @@ namespace rg
 
         // Erase
 
-        void remove_at(size_t index) {
+        void remove_at(size_t index)
+        {
             if (index > size())
             {
                 // The index is not in the vector, so it is already erased, in a way
@@ -337,8 +339,8 @@ namespace rg
             else
             {
                 // The element is not the last one, so we need to move the last element to the index and pop_back
-                T& elem = *static_cast<T *>(m_impl.get_element(index));
-                T& last_elem = *static_cast<T *>(m_impl.get_element(size() - 1));
+                T &elem      = *static_cast<T *>(m_impl.get_element(index));
+                T &last_elem = *static_cast<T *>(m_impl.get_element(size() - 1));
 
                 // We will destroy the last element, so we can move it
                 elem = std::move(last_elem);

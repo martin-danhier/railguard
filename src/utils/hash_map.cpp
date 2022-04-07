@@ -109,7 +109,7 @@ namespace rg
 
     HashMap::HashMap(HashMap &&other) noexcept : m_data(other.m_data)
     {
-        // Just take the other's data, and set it to null so that it can't delete it
+        // Just take the other's m_data, and set it to null so that it can't delete it
         other.m_data = nullptr;
     }
 
@@ -130,10 +130,10 @@ namespace rg
     {
         if (this != &other)
         {
-            // Delete old data
+            // Delete old m_data
             this->~HashMap();
 
-            // Copy new data
+            // Copy new m_data
             m_data           = new Data;
             m_data->capacity = other.m_data->capacity;
             m_data->count    = other.m_data->count;
@@ -150,13 +150,13 @@ namespace rg
     {
         if (this != &other)
         {
-            // Delete old data
+            // Delete old m_data
             this->~HashMap();
 
-            // Take other's data
+            // Take other's m_data
             m_data = other.m_data;
 
-            // Set other's data to null so that it can't delete it
+            // Set other's m_data to null so that it can't delete it
             other.m_data = nullptr;
         }
 
@@ -195,7 +195,7 @@ namespace rg
         // Delete old entries
         delete[] m_data->entries;
 
-        // Update data
+        // Update m_data
         m_data->capacity = new_capacity;
         m_data->entries  = new_entries;
     }

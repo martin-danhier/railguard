@@ -49,13 +49,16 @@ set(railguard_lib_sources
     src/utils/vector_impl.cpp
     src/utils/hash_map.cpp
     src/utils/io.cpp
+    src/utils/geometry/transform.cpp
+    include/railguard/utils/geometry/vec3.h
+    include/railguard/utils/geometry/quat.h
     include/railguard/utils/array.h
     include/railguard/utils/map.h
     include/railguard/utils/vector.h
     include/railguard/utils/optional.h
     include/railguard/utils/storage.h
     include/railguard/utils/event_sender.h
-)
+        )
 
 # Add header directories for main lib
 set(railguard_lib_header_dir
@@ -160,6 +163,9 @@ endif()
 
 # Load external script
 add_subdirectory(external)
+
+# Link common
+target_link_libraries(railguard_lib PUBLIC glm)
 
 # Link dependencies
 if (${interactive} STREQUAL "0")

@@ -10,7 +10,7 @@ TEST {
     // Create sender
     rg::EventSender<EventData> sender;
 
-    // Create event data
+    // Create event m_data
     EventData event_data{1524};
 
     // Subscribe to event

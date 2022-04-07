@@ -16,7 +16,7 @@ TEST
     EXPECT_TRUE(storage.is_empty());
     EXPECT_EQ(storage.count(), static_cast<size_t>(0));
 
-    // Push some data
+    // Push some m_data
     auto i1 = storage.push(Data {1, 2});
     EXPECT_EQ(i1, static_cast<size_t>(1));
     auto i2 = storage.push(Data {3, 4});
@@ -28,7 +28,7 @@ TEST
     EXPECT_FALSE(storage.is_empty());
     EXPECT_EQ(storage.count(), static_cast<size_t>(3));
 
-    // Should be able to get the data
+    // Should be able to get the m_data
     auto v1 = storage.get(i1);
     ASSERT_TRUE(v1.has_value());
     EXPECT_EQ(v1->a, 1);

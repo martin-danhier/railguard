@@ -49,7 +49,7 @@ namespace rg
 
         // Hash map to store indices of the elements
         HashMap m_hash_map;
-        // Storage to store the actual data
+        // Storage to store the actual m_data
         Vector<Entry> m_storage;
 
       public:

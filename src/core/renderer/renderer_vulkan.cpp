@@ -3,6 +3,7 @@
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
+#include <railguard/utils/geometry/transform.h>
 #include <railguard/utils/io.h>
 #include <railguard/utils/storage.h>
 
@@ -125,6 +126,31 @@ namespace rg
 
     // Main types
 
+    struct Camera
+    {
+        bool       enabled                = false;
+        size_t     target_swapchain_index = 0;
+        Transform  transform              = {};
+        CameraType type                   = CameraType::PERSPECTIVE;
+        union
+        {
+            struct
+            {
+                float fov          = 0.0f;
+                float aspect_ratio = 0.0f;
+                float near_plane   = 0.0f;
+                float far_plane    = 0.0f;
+            } perspective;
+            struct
+            {
+                float width      = 0.0f;
+                float height     = 0.0f;
+                float near_plane = 0.0f;
+                float far_plane  = 0.0f;
+            } orthographic;
+        };
+    };
+
     struct RenderBatch
     {
         size_t     offset   = 0;
@@ -218,6 +244,7 @@ namespace rg
         Storage<Material>         materials          = {};
         Storage<Model>            models             = {};
         Storage<RenderNode>       render_nodes       = {};
+        Storage<Camera>           cameras            = {};
 
         // Number incremented at each created shader effect
         // It is stored in the swapchain when effects are built
@@ -437,8 +464,8 @@ namespace rg
      * Callback for the vulkan debug messenger
      * @param message_severity Severity of the message
      * @param message_types Type of the message
-     * @param callback_data Additional data concerning the message
-     * @param user_data User data passed to the debug messenger
+     * @param callback_data Additional m_data concerning the message
+     * @param user_data User m_data passed to the debug messenger
      */
     VkBool32 debug_messenger_callback(VkDebugUtilsMessageSeverityFlagBitsEXT      message_severity,
                                       VkDebugUtilsMessageTypeFlagsEXT             message_types,
@@ -1117,7 +1144,7 @@ namespace rg
 
     VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const
     {
-        // This function will take the data contained in the effect and build a pipeline with it
+        // This function will take the m_data contained in the effect and build a pipeline with it
         // First, create all the structs we will need in the pipeline create info
 
         // region Create shader stages
@@ -1508,6 +1535,10 @@ namespace rg
 
     // endregion
 
+    // region Camera functions
+
+    // endregion
+
     // ---==== Renderer ====---
 
     Renderer::Renderer(const Window  &example_window,
@@ -1882,13 +1913,13 @@ namespace rg
 
     Renderer::Renderer(Renderer &&other) noexcept : m_data(other.m_data)
     {
-        // Just take the other's data and set the original to null, so it can't access it anymore
+        // Just take the other's m_data and set the original to null, so it can't access it anymore
         other.m_data = nullptr;
     }
 
     Renderer::~Renderer()
     {
-        // If the data is null, then the renderer was never initialized
+        // If the m_data is null, then the renderer was never initialized
         if (m_data == nullptr)
             return;
 
@@ -2053,7 +2084,7 @@ namespace rg
 
         // "this" is moved after the creation of the renderer
         // Thus the pointer doesn't point to the right place anymore when the callback is called
-        // To ensure that the callback uses the real data, we need to copy the pointer to the renderer Data
+        // To ensure that the callback uses the real m_data, we need to copy the pointer to the renderer Data
         // Also, we fetch the swapchain with the window index again because the swapchain variable here is local
         auto data = m_data;
         swapchain.window_resize_event_handler_id =
@@ -2346,6 +2377,12 @@ namespace rg
 
     void Renderer::draw()
     {
+        // If there are no cameras, there is nothing to draw
+        if (m_data->cameras.is_empty())
+        {
+            return;
+        }
+
         // Get current frame
         const uint64_t current_frame_index = m_data->get_current_frame_index();
         FrameData     &current_frame       = m_data->frames[current_frame_index];
@@ -2353,11 +2390,16 @@ namespace rg
         // Wait for the fence
         m_data->wait_for_fence(current_frame.render_fence);
 
-        // For each enabled swapchain
-        for (auto &swapchain : m_data->swapchains)
+        // For each enabled camera
+        for (auto &cam_entry : m_data->cameras)
         {
-            if (swapchain.enabled)
+            const auto &camera = cam_entry.value();
+            if (camera.enabled)
             {
+                // Get its target swapchain
+                auto &swapchain = m_data->swapchains[camera.target_swapchain_index];
+                check(swapchain.enabled, "Active camera tries to render to a disabled swapchain.");
+
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
 
@@ -2415,6 +2457,123 @@ namespace rg
 
         // Increment frame number
         m_data->current_frame_number++;
+    }
+
+    // endregion
+
+    // region Cameras
+
+    CameraId Renderer::create_orthographic_camera(uint32_t window_index, float near, float far)
+    {
+        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        const auto &extent = m_data->swapchains[window_index].viewport_extent;
+        return create_orthographic_camera(window_index,
+                                          static_cast<float>(extent.width),
+                                          static_cast<float>(extent.height),
+                                          near,
+                                          far,
+                                          Transform());
+    }
+    CameraId Renderer::create_orthographic_camera(uint32_t window_index, float width, float height, float near, float far)
+    {
+        return create_orthographic_camera(window_index, width, height, near, far, Transform());
+    }
+    CameraId Renderer::create_orthographic_camera(uint32_t         window_index,
+                                                  float            width,
+                                                  float            height,
+                                                  float            near,
+                                                  float            far,
+                                                  const Transform &transform)
+    {
+        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        // Create camera
+        return m_data->cameras.push(Camera {
+            .enabled                = true,
+            .target_swapchain_index = window_index,
+            .transform              = transform,
+            .type                   = CameraType::ORTHOGRAPHIC,
+            .orthographic =
+                {
+                    .width      = width,
+                    .height     = height,
+                    .near_plane = near,
+                    .far_plane  = far,
+                },
+        });
+    }
+
+    CameraId Renderer::create_perspective_camera(uint32_t window_index, float fov, float near, float far)
+    {
+        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        const auto &extent = m_data->swapchains[window_index].viewport_extent;
+        return create_perspective_camera(window_index,
+                                         fov,
+                                         static_cast<float>(extent.width) / static_cast<float>(extent.height),
+                                         near,
+                                         far,
+                                         Transform());
+    }
+    CameraId Renderer::create_perspective_camera(uint32_t window_index, float fov, float aspect, float near, float far)
+    {
+        return create_perspective_camera(window_index, fov, aspect, near, far, Transform());
+    }
+    CameraId Renderer::create_perspective_camera(uint32_t         window_index,
+                                                 float            fov,
+                                                 float            aspect,
+                                                 float            near,
+                                                 float            far,
+                                                 const Transform &transform)
+    {
+        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        // Create camera
+        return m_data->cameras.push(Camera {
+            .enabled                = true,
+            .target_swapchain_index = window_index,
+            .transform              = transform,
+            .type                   = CameraType::PERSPECTIVE,
+            .perspective =
+                {
+                    .fov          = fov,
+                    .aspect_ratio = aspect,
+                    .near_plane   = near,
+                    .far_plane    = far,
+                },
+        });
+    }
+
+    void Renderer::remove_camera(CameraId id)
+    {
+        m_data->cameras.remove(id);
+    }
+
+    const Transform &Renderer::get_camera_transform(CameraId id) const
+    {
+        return m_data->cameras[id].transform;
+    }
+
+    Transform &Renderer::get_camera_transform(CameraId id)
+    {
+        return m_data->cameras[id].transform;
+    }
+
+    void Renderer::disable_camera(CameraId id)
+    {
+        m_data->cameras[id].enabled = false;
+    }
+
+    void Renderer::enable_camera(CameraId id)
+    {
+        m_data->cameras[id].enabled = true;
+    }
+
+    bool Renderer::is_camera_enabled(CameraId id) const
+    {
+        return m_data->cameras[id].enabled;
+    }
+
+    CameraType Renderer::get_camera_type(CameraId id) const
+    {
+        return m_data->cameras[id].type;
     }
 
     // endregion

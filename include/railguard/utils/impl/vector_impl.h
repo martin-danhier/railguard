@@ -15,7 +15,7 @@ namespace rg::_impl
          */
         size_t m_count = 0;
         /** @brief Maximum number of elements that the allocation can fit without resizing.
-         *  A value of 0 indicates that the vector is not allocated (data is NULL).
+         *  A value of 0 indicates that the vector is not allocated (m_data is NULL).
          */
         size_t m_capacity = 0;
         /** @brief Size of a single element. */
@@ -45,7 +45,7 @@ namespace rg::_impl
         void  ensure_capacity(size_t required_minimum_capacity);
         void *push_slot();
         /**
-         * Pops the last slot from the vector. The data is not freed, and it is assumed that there is at least one element in the
+         * Pops the last slot from the vector. The m_data is not freed, and it is assumed that there is at least one element in the
          * vector.
          */
         inline void pop_back()

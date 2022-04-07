@@ -1,5 +1,5 @@
 #include "test_framework/test_framework.hpp"
-#include <railguard/core/triangle.h>
+#include <railguard/core/engine.h>
 #include <railguard/utils/array.h>
 #include <railguard/core/renderer.h>
 
@@ -30,6 +30,8 @@ TEST
     // Create a render node
     auto render_node = renderer.create_render_node(model);
 
+    // Create a camera
+    auto camera = renderer.create_orthographic_camera(0, 500, 500, 0, 100);
 
     // Run engine
     EXPECT_NO_THROWS(engine.run_main_loop());
