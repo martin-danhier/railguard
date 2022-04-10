@@ -9,7 +9,7 @@ namespace rg
     template<typename T>
     class Array;
 
-    struct Transform;
+    class Transform;
 
     // ---==== Structs ====---
 

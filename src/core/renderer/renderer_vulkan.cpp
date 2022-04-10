@@ -1,8 +1,10 @@
 #ifdef RENDERER_VULKAN
 #include "railguard/core/renderer.h"
+#include <railguard/core/gpu_structs.h>
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
+#include <railguard/utils/geometry/mat4.h>
 #include <railguard/utils/geometry/transform.h>
 #include <railguard/utils/io.h>
 #include <railguard/utils/storage.h>
@@ -11,6 +13,8 @@
 #include <string>
 #include <volk.h>
 // Needs to be after volk.h
+#include <railguard/utils/vulkan/descriptor_set_helpers.h>
+
 #include <vk_mem_alloc.h>
 
 // ---==== Defines ====---
@@ -180,6 +184,11 @@ namespace rg
         VkFence         render_fence      = VK_NULL_HANDLE;
     };
 
+    struct SwapchainFrameData
+    {
+        VkDescriptorSet swapchain_set = VK_NULL_HANDLE;
+    };
+
     struct Queue
     {
         uint32_t family_index = 0;
@@ -212,6 +221,10 @@ namespace rg
         // Since vulkan handles are just pointers, a hash map is all we need
         HashMap  pipelines             = {};
         uint64_t built_effects_version = 0;
+        // Camera info uniform buffer
+        AllocatedBuffer           camera_info_buffer = {};
+        Array<SwapchainFrameData> frames             = {};
+
         // Render stages
         Array<RenderStage> render_stages = {};
     };
@@ -228,7 +241,7 @@ namespace rg
         VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 #endif
         /**
-         * @brief Fixed-count array containing the swapchains.
+         * @brief Fixed-size array containing the swapchains.
          * We place them in a array to be able to efficiently iterate through them.
          */
         Array<Swapchain> swapchains = {};
@@ -245,6 +258,10 @@ namespace rg
         Storage<Model>            models             = {};
         Storage<RenderNode>       render_nodes       = {};
         Storage<Camera>           cameras            = {};
+
+        // Descriptor pool
+        DynamicDescriptorPool descriptor_pool              = {};
+        VkDescriptorSetLayout global_descriptor_set_layout = VK_NULL_HANDLE;
 
         // Number incremented at each created shader effect
         // It is stored in the swapchain when effects are built
@@ -276,6 +293,12 @@ namespace rg
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
 
         void update_stage_cache(Swapchain &swapchain);
+
+        void send_camera_data(Swapchain &swapchain, const Camera &camera) const;
+
+        template<typename T>
+        void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, bool apply_padding = false);
+        [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
     };
 
     // endregion
@@ -739,15 +762,51 @@ namespace rg
             buffer.size       = 0;
         }
     }
+
     void *Allocator::map_buffer(AllocatedBuffer &buffer) const
     {
         void *data = nullptr;
         vk_check(vmaMapMemory(m_allocator, buffer.allocation, &data), "Failed to map buffer");
         return data;
     }
+
     void Allocator::unmap_buffer(AllocatedBuffer &buffer) const
     {
         vmaUnmapMemory(m_allocator, buffer.allocation);
+    }
+
+    template<typename T>
+    void Renderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, bool apply_padding)
+    {
+        // Copy the data to the GPU
+        char *data = static_cast<char *>(allocator.map_buffer(dst));
+
+        // Pad the data if needed
+        if (apply_padding)
+        {
+            // TODO really necessary?
+            auto frame_index = get_current_frame_index();
+            data += pad_uniform_buffer_size(sizeof(T)) * frame_index;
+        }
+
+        memcpy(data, &src, dst.size);
+        allocator.unmap_buffer(dst);
+    }
+
+    size_t Renderer::Data::pad_uniform_buffer_size(size_t original_size) const
+    {
+        // Get GPU properties
+        VkPhysicalDeviceProperties device_properties;
+        vkGetPhysicalDeviceProperties(physical_device, &device_properties);
+
+        // Get the alignment requirement
+        size_t min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
+        size_t aligned_size  = original_size;
+        if (min_alignment > 0)
+        {
+            aligned_size = (aligned_size + min_alignment - 1) & ~(min_alignment - 1);
+        }
+        return aligned_size;
     }
 
     // endregion
@@ -992,7 +1051,7 @@ namespace rg
         swapchain.images = Array<VkImage>(effective_image_count);
         vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &effective_image_count, swapchain.images.data()));
 
-        // Update the image count based on how many were effectively created
+        // Update the image size based on how many were effectively created
         swapchain.image_count = effective_image_count;
 
         // Create image views for those images
@@ -1149,8 +1208,8 @@ namespace rg
 
         // region Create shader stages
 
-        Array<VkPipelineShaderStageCreateInfo> stages(effect.shader_stages.count());
-        for (auto i = 0; i < effect.shader_stages.count(); i++)
+        Array<VkPipelineShaderStageCreateInfo> stages(effect.shader_stages.size());
+        for (auto i = 0; i < effect.shader_stages.size(); i++)
         {
             // Get shader module
             const auto &module = shader_modules.get(effect.shader_stages[i]);
@@ -1336,7 +1395,7 @@ namespace rg
             .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .pNext               = nullptr,
             .flags               = 0,
-            .stageCount          = static_cast<uint32_t>(stages.count()),
+            .stageCount          = static_cast<uint32_t>(stages.size()),
             .pStages             = stages.data(),
             .pVertexInputState   = &vertex_input_state_create_info,
             .pInputAssemblyState = &input_assembly_state_create_info,
@@ -1510,7 +1569,6 @@ namespace rg
             }
         }
     }
-
     void draw_from_cache(const RenderStage &stage, VkCommandBuffer cmd)
     {
         constexpr uint32_t draw_stride    = sizeof(VkDrawIndirectCommand);
@@ -1536,6 +1594,39 @@ namespace rg
     // endregion
 
     // region Camera functions
+
+    void Renderer::Data::send_camera_data(Swapchain &swapchain, const Camera &camera) const
+    {
+        // Get camera infos and send them to the shader
+        GPUCameraData camera_data = {};
+
+        // Projection
+        switch (camera.type)
+        {
+            case CameraType::PERSPECTIVE:
+                camera_data.projection = Mat4::perspective(camera.perspective.fov,
+                                                           camera.perspective.aspect_ratio,
+                                                           camera.perspective.near_plane,
+                                                           camera.perspective.far_plane);
+                break;
+            case CameraType::ORTHOGRAPHIC:
+                camera_data.projection = Mat4::orthographic(-camera.orthographic.width / 2.0f,
+                                                            camera.orthographic.width / 2.0f,
+                                                            -camera.orthographic.height / 2.0f,
+                                                            camera.orthographic.height / 2.0f,
+                                                            camera.orthographic.near_plane,
+                                                            camera.orthographic.far_plane);
+                break;
+        }
+
+        // View
+        camera_data.view = camera.transform.view_matrix();
+        // View projection
+        camera_data.view_projection = camera_data.projection * camera_data.view;
+
+        // Copy it to buffer
+        //        copy_buffer_to_gpu(camera_data, )
+    }
 
     // endregion
 
@@ -1564,7 +1655,7 @@ namespace rg
             auto required_extensions = example_window.get_required_vulkan_extensions(extra_extension_count);
 
             // Add other extensions in the extra slots
-            auto extra_ext_index = required_extensions.count() - extra_extension_count;
+            auto extra_ext_index = required_extensions.size() - extra_extension_count;
 #ifdef USE_VK_VALIDATION_LAYERS
             required_extensions[extra_ext_index++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 #endif
@@ -1607,7 +1698,7 @@ namespace rg
                 .ppEnabledLayerNames = nullptr,
 #endif
                 // Extensions
-                .enabledExtensionCount   = static_cast<uint32_t>(required_extensions.count()),
+                .enabledExtensionCount   = static_cast<uint32_t>(required_extensions.size()),
                 .ppEnabledExtensionNames = required_extensions.data(),
             };
 
@@ -1736,7 +1827,7 @@ namespace rg
                 .enabledLayerCount   = 0,
                 .ppEnabledLayerNames = nullptr,
                 // Extensions
-                .enabledExtensionCount   = static_cast<uint32_t>(required_device_extensions.count()),
+                .enabledExtensionCount   = static_cast<uint32_t>(required_device_extensions.size()),
                 .ppEnabledExtensionNames = required_device_extensions.data(),
                 .pEnabledFeatures        = nullptr,
             };
@@ -1856,6 +1947,14 @@ namespace rg
         }
         // endregion
 
+        // --=== Descriptors setup ===--
+
+        // region Descriptors setup
+
+        m_data->descriptor_pool = DynamicDescriptorPool(m_data->device, {3, 3});
+
+        // endregion
+
         // --=== Init frames ===--
 
         // region Init frames
@@ -1940,6 +2039,9 @@ namespace rg
             vkDestroyCommandPool(m_data->device, frame.command_pool, nullptr);
         }
 
+        // Destroy descriptor layouts
+        vkDestroyDescriptorSetLayout(m_data->device, m_data->global_descriptor_set_layout, nullptr);
+
         // Clear storages
         clear_render_nodes();
         clear_models();
@@ -1977,7 +2079,7 @@ namespace rg
     void Renderer::connect_window(uint32_t window_slot_index, Window &window)
     {
         // Prevent access to the positions that are outside the swapchain array
-        check(window_slot_index < m_data->swapchains.count(), "Window index is out of bounds");
+        check(window_slot_index < m_data->swapchains.size(), "Window index is out of bounds");
 
         // Get the swapchain in the renderer
         Swapchain &swapchain = m_data->swapchains[window_slot_index];
@@ -2045,12 +2147,12 @@ namespace rg
 
         // endregion
 
-        // region Image count selection
+        // region Image size selection
 
         VkSurfaceCapabilitiesKHR surface_capabilities = {};
         vk_check(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_data->physical_device, swapchain.surface, &surface_capabilities));
 
-        // For the image count, take the minimum plus one. Or, if the minimum is equal to the maximum, take that value.
+        // For the image size, take the minimum plus one. Or, if the minimum is equal to the maximum, take that value.
         uint32_t image_count = surface_capabilities.minImageCount + 1;
         if (surface_capabilities.maxImageCount > 0 && image_count > surface_capabilities.maxImageCount)
         {
@@ -2172,7 +2274,7 @@ namespace rg
 
     ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind)
     {
-        check(stages.count() > 0, "A shader effect must have at least one stage.");
+        check(stages.size() > 0, "A shader effect must have at least one stage.");
 
         // Create shader effect
         ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
@@ -2225,7 +2327,7 @@ namespace rg
 
     MaterialTemplateId Renderer::create_material_template(const Array<ShaderEffectId> &available_effects)
     {
-        check(available_effects.count() > 0, "A material template must have at least one effect.");
+        check(available_effects.size() > 0, "A material template must have at least one effect.");
 
         // Create material template
         return m_data->material_templates.push({
@@ -2400,6 +2502,9 @@ namespace rg
                 auto &swapchain = m_data->swapchains[camera.target_swapchain_index];
                 check(swapchain.enabled, "Active camera tries to render to a disabled swapchain.");
 
+                // Get camera infos and send them to the shader
+                m_data->send_camera_data(swapchain, camera);
+
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
 
@@ -2465,7 +2570,7 @@ namespace rg
 
     CameraId Renderer::create_orthographic_camera(uint32_t window_index, float near, float far)
     {
-        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        check(window_index < m_data->swapchains.size(), "Invalid window index");
         const auto &extent = m_data->swapchains[window_index].viewport_extent;
         return create_orthographic_camera(window_index,
                                           static_cast<float>(extent.width),
@@ -2485,7 +2590,7 @@ namespace rg
                                                   float            far,
                                                   const Transform &transform)
     {
-        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        check(window_index < m_data->swapchains.size(), "Invalid window index");
         // Create camera
         return m_data->cameras.push(Camera {
             .enabled                = true,
@@ -2504,7 +2609,7 @@ namespace rg
 
     CameraId Renderer::create_perspective_camera(uint32_t window_index, float fov, float near, float far)
     {
-        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        check(window_index < m_data->swapchains.size(), "Invalid window index");
         const auto &extent = m_data->swapchains[window_index].viewport_extent;
         return create_perspective_camera(window_index,
                                          fov,
@@ -2524,7 +2629,7 @@ namespace rg
                                                  float            far,
                                                  const Transform &transform)
     {
-        check(window_index < m_data->swapchains.count(), "Invalid window index");
+        check(window_index < m_data->swapchains.size(), "Invalid window index");
         // Create camera
         return m_data->cameras.push(Camera {
             .enabled                = true,

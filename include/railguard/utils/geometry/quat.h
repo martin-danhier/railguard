@@ -2,7 +2,9 @@
 
 namespace rg
 {
-    struct Quat
+    class Mat4;
+
+    class Quat
     {
       private:
         union Data
@@ -70,6 +72,31 @@ namespace rg
         {
             return m_data.data[index];
         }
+
+        // Operators
+
+        [[nodiscard]] constexpr inline Quat operator*(float scalar) const {
+            return {m_data.r * scalar, m_data.i * scalar, m_data.j * scalar, m_data.k * scalar};
+        }
+
+        [[nodiscard]] constexpr inline Quat operator/(float scalar) const {
+            return {m_data.r / scalar, m_data.i / scalar, m_data.j / scalar, m_data.k / scalar};
+        }
+
+        // Methods
+
+        [[nodiscard]] constexpr inline Quat conjugate() const
+        {
+            return {m_data.r, -m_data.i, -m_data.j, -m_data.k};
+        }
+
+        [[nodiscard]] float norm() const;
+
+        [[nodiscard]] constexpr inline Quat normalize() const {
+            return *this / norm();
+        }
+
+        [[nodiscard]] Mat4 to_mat4() const;
 
     };
 } // namespace rg

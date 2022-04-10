@@ -19,6 +19,7 @@ cmake-build-debug-coverage
 
 # Md file not added to git to write things to help think about the structure
 think-board.md
+think_board.md
 
 # Misc
 *.log

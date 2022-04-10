@@ -37,7 +37,7 @@ namespace rg
       public:
         // Constructor
         Window(Extent2D extent, const char *title);
-        // No copy constructor: we want only 1 handler per window because we don't have a reference count to handle deletion properly
+        // No copy constructor: we want only 1 handler per window because we don't have a reference size to handle deletion properly
         Window(Window &&other) noexcept;
         ~Window();
 

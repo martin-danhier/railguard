@@ -1,5 +1,6 @@
 #pragma once
 
+#include <railguard/utils/array_like.h>
 #include <railguard/utils/impl/vector_impl.h>
 #include <railguard/utils/optional.h>
 
@@ -8,8 +9,10 @@
 namespace rg
 {
     template<typename T>
-    class Vector
+    class Vector : public ArrayLike<T>
     {
+        using Base = ArrayLike<T>;
+
         _impl::VectorImpl m_impl;
 
       public:
@@ -54,24 +57,35 @@ namespace rg
             m_impl.ensure_capacity(required_minimum_capacity);
         }
 
+        inline T *data()
+        {
+            return static_cast<T *>(m_impl.data());
+        }
+
+        inline const T *data() const
+        {
+            return static_cast<const T *>(m_impl.data());
+        }
+
         // Push back
 
         inline void push_back(const T &value)
         {
-            T &slot = *static_cast<T *>(m_impl.push_slot());
-            slot    = value;
+            auto *slot = static_cast<T *>(m_impl.push_slot());
+            // Since this is a new slot, the value is not initialized so there is no need to call the constructor
+            new (slot) T(value);
         }
 
         inline void push_back(T &&value)
         {
             // Same as above
-            T &slot = *static_cast<T *>(m_impl.push_slot());
-            slot    = std::move(value);
+            auto *slot = static_cast<T *>(m_impl.push_slot());
+            new (slot) T(std::move(value));
         }
 
         // Extend
 
-        void extend(const Vector<T> &other)
+        inline void extend(const Vector<T> &other)
         {
             ensure_capacity(m_impl.size() + other.m_impl.size());
 
@@ -81,7 +95,7 @@ namespace rg
             }
         }
 
-        void extend(Vector<T> &&other)
+        inline void extend(Vector<T> &&other)
         {
             ensure_capacity(m_impl.size() + other.m_impl.size());
 
@@ -147,24 +161,24 @@ namespace rg
             return m_impl.capacity();
         }
 
-        T &last()
+        inline T &last()
         {
             if (m_impl.size() == 0)
             {
                 throw std::out_of_range("Vector is empty");
             }
 
-            return m_impl.last_element();
+            return *static_cast<T *>(m_impl.last_element());
         }
 
-        const T &last() const
+        inline const T &last() const
         {
             if (m_impl.size() == 0)
             {
                 throw std::out_of_range("Vector is empty");
             }
 
-            return m_impl.last_element();
+            return *static_cast<const T *>(m_impl.last_element());
         }
 
         [[nodiscard]] inline bool is_empty() const
@@ -215,97 +229,6 @@ namespace rg
                 }
             }
             return none<size_t>();
-        }
-
-        // iterator
-        class iterator
-        {
-          private:
-            T                       *m_ptr;
-            size_t                   m_index;
-            const _impl::VectorImpl *m_impl;
-
-          public:
-            // Traits
-            using difference_type   = ptrdiff_t;
-            using value_type        = T;
-            using pointer           = value_type *;
-            using reference         = value_type &;
-            using iterator_category = std::bidirectional_iterator_tag;
-
-            iterator(const Vector &vec, size_t startIndex) : m_ptr(nullptr), m_index(startIndex), m_impl(&vec.m_impl)
-            {
-                if (m_impl->is_valid() && m_index < m_impl->size())
-                {
-                    m_ptr = static_cast<T *>(m_impl->get_element(m_index));
-                }
-            }
-
-            // Operators
-            bool operator==(const iterator &other) const
-            {
-                return m_impl == other.m_impl && m_index == other.m_index;
-            }
-
-            bool operator!=(const iterator &other) const
-            {
-                return m_impl != other.m_impl || m_index != other.m_index;
-            }
-
-            iterator &operator++()
-            {
-                if (m_ptr != nullptr)
-                {
-                    m_index++;
-                    if (m_index < m_impl->size())
-                    {
-                        m_ptr++;
-                    }
-                    else
-                    {
-                        m_ptr = nullptr;
-                    }
-                }
-                return *this;
-            }
-
-            iterator &operator--()
-            {
-                if (m_ptr != nullptr)
-                {
-                    m_index--;
-                    if (m_index > 0)
-                    {
-                        m_ptr--;
-                    }
-                    else
-                    {
-                        m_ptr = nullptr;
-                    }
-                }
-
-                return *this;
-            }
-
-            reference operator*()
-            {
-                return *m_ptr;
-            }
-
-            pointer operator->()
-            {
-                return m_ptr;
-            }
-        };
-
-        iterator begin() const
-        {
-            return iterator(*this, 0);
-        }
-
-        iterator end() const
-        {
-            return iterator(*this, m_impl.size());
         }
 
         // Clear

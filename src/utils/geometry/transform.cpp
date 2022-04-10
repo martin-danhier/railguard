@@ -1,4 +1,5 @@
 #include "railguard/utils/geometry/transform.h"
+#include <railguard/utils/geometry/mat4.h>
 
 namespace rg
 {
@@ -12,6 +13,15 @@ namespace rg
           m_rotation(rotation),
           m_scale(scale)
     {
+    }
+
+    Mat4 Transform::view_matrix() const
+    {
+        auto view = Mat4::identity();
+        view.scale(m_scale);
+        view.translate(m_position);
+        view.rotate(m_rotation);
+        return view;
     }
 
 } // namespace rg

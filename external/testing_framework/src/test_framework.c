@@ -223,7 +223,7 @@ void tf_delete_context(tf_context *context)
         // Free message
         if (error->message.message_is_dynamic)
         {
-            free((void*) error->message.message);
+            free((void *) error->message.message);
             error->message.message = NULL;
         }
     }
@@ -320,6 +320,16 @@ bool tf_assert_null(tf_context *context, size_t line_number, const char *file, v
                             recoverable
                                 ? tf_const_msg("Condition failed. Got [NULL], expected something else.")
                                 : tf_const_msg("Assertion failed. Got [NULL], expected something else. Unable to continue execution."),
+                            recoverable);
+}
+
+bool tf_assert_error(tf_context *context, size_t line_number, const char *file, const char *message, bool recoverable)
+{
+    return tf_assert_common(context,
+                            line_number,
+                            file,
+                            false, // Always false
+                            tf_const_msg(message),
                             recoverable);
 }
 

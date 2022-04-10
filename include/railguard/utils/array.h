@@ -1,5 +1,7 @@
 #pragma once
 
+#include <railguard/utils/array_like.h>
+
 #include <cstddef>
 #include <iterator>
 
@@ -7,9 +9,11 @@ namespace rg
 {
     /** Simple array of dynamic size. */
     template<typename T>
-    class Array
+    class Array : public ArrayLike<T>
     {
       private:
+        using Base = ArrayLike<T>;
+
         size_t m_count = 0;
         T     *m_data  = nullptr;
 
@@ -104,7 +108,7 @@ namespace rg
                 }
 
                 delete[] m_data;
-                m_data = nullptr;
+                m_data  = nullptr;
                 m_count = 0;
             }
         }
@@ -121,83 +125,34 @@ namespace rg
         }
 
         // Getters
-        [[nodiscard]] size_t count() const
+        [[nodiscard]] size_t size() const
         {
             return m_count;
         }
 
-        [[nodiscard]] T *data() const
+        [[nodiscard]] T *data()
+        {
+            return m_data;
+        }
+
+        [[nodiscard]] const T *data() const
         {
             return m_data;
         }
 
         // Other methods
-        bool includes(const T &value) const {
-            for (const auto &v : *this) {
-                if (v == value) {
+        bool includes(const T &value) const
+        {
+            for (const auto &v : *this)
+            {
+                if (v == value)
+                {
                     return true;
                 }
             }
             return false;
         }
 
-        // Iterator
-        class Iterator
-        {
-          public:
-            // Traits
-            using difference_type   = ptrdiff_t;
-            using value_type        = T;
-            using pointer           = value_type *;
-            using reference         = value_type &;
-            using iterator_category = std::bidirectional_iterator_tag;
-
-          private:
-            T     *m_data;
-            size_t m_index;
-
-          public:
-            Iterator(T *data, size_t index) : m_data(data), m_index(index)
-            {
-            }
-
-            Iterator &operator++()
-            {
-                ++m_index;
-                return *this;
-            }
-
-            Iterator &operator--()
-            {
-                --m_index;
-                return *this;
-            }
-
-            bool operator!=(const Iterator &other) const
-            {
-                return m_index != other.m_index;
-            }
-
-            T &operator*()
-            {
-                return m_data[m_index];
-            }
-
-            T *operator->()
-            {
-                return &m_data[m_index];
-            }
-        };
-
-        Iterator begin() const
-        {
-            return Iterator(m_data, 0);
-        }
-
-        Iterator end() const
-        {
-            return Iterator(m_data, m_count);
-        }
     };
 
 } // namespace rg

@@ -2,11 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-
-namespace std
-{ // NOLINT(cert-dcl58-cpp)
-    class forward_iterator_tag;
-}
+#include <iterator>
 
 namespace rg
 {
@@ -61,10 +57,10 @@ namespace rg
         [[nodiscard]] Optional<Value *> get(const Key &key) const;
         void                            set(const Key &key, const Value &value);
         void                            remove(const Key &key);
-        bool exists(const Key &key) const;
+        [[nodiscard]] bool              exists(const Key &key) const;
         void                            clear();
-        [[nodiscard]] size_t                          count() const;
-        [[nodiscard]] bool is_empty() const;
+        [[nodiscard]] size_t            count() const;
+        [[nodiscard]] bool              is_empty() const;
 
         // Iterator
         class Iterator

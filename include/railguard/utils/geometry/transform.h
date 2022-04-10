@@ -5,7 +5,9 @@
 
 namespace rg
 {
-    struct Transform
+    class Mat4;
+
+    class Transform
     {
       private:
         Vec3 m_position;
@@ -37,6 +39,9 @@ namespace rg
         [[nodiscard]] inline const Vec3& scale() const {
             return m_scale;
         }
+
+        // Methods
+        Mat4 view_matrix() const;
 
     };
 } // namespace rg

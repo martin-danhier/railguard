@@ -116,9 +116,17 @@ TEST
         EXPECT_TRUE(v[i].get_value() == i);
     }
 
-    // And it also works with iterator
+    // And it also works with Iterator
     size_t i = 0;
     for (auto &value : v)
+    {
+        EXPECT_TRUE(value.get_value() == i++);
+    }
+    EXPECT_TRUE(i == v.size());
+
+    // And also with const Iterator
+    i = 0;
+    for (const auto &value : v)
     {
         EXPECT_TRUE(value.get_value() == i++);
     }

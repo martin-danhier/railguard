@@ -210,7 +210,7 @@ namespace rg
             }
         }
 
-        // Iterator: we just use the vector iterator, no need to touch the map
+        // Iterator: we just use the vector Iterator, no need to touch the map
 
         class Iterator
         {
@@ -223,11 +223,11 @@ namespace rg
             using iterator_category = std::forward_iterator_tag;
 
           private:
-            typename Vector<value_type>::iterator m_it;
+            typename ArrayLike<value_type>::Iterator m_it;
 
           public:
             // Constructors
-            explicit Iterator(const typename Vector<value_type>::iterator &&it) : m_it(std::move(it))
+            explicit Iterator(const typename ArrayLike<value_type>::Iterator &&it) : m_it(std::move(it))
             {
             }
 
@@ -255,14 +255,71 @@ namespace rg
             }
         };
 
-        Iterator begin() const
+        Iterator begin()
         {
             return Iterator(m_storage.begin());
         }
 
-        Iterator end() const
+        Iterator end()
         {
             return Iterator(m_storage.end());
         }
+
+        // Const Iterator: we just use the vector Iterator, no need to touch the map
+
+        class ConstIterator
+        {
+          public:
+            // Traits
+            using difference_type   = ptrdiff_t;
+            using value_type        = Entry;
+            using pointer           = const value_type *;
+            using reference         = const value_type &;
+            using iterator_category = std::forward_iterator_tag;
+
+          private:
+            typename ArrayLike<value_type>::ConstIterator m_it;
+
+          public:
+            // Constructors
+            explicit ConstIterator(typename ArrayLike<value_type>::ConstIterator &&it) : m_it(std::move(it))
+            {
+            }
+
+            // Operators
+            ConstIterator &operator++()
+            {
+                ++m_it;
+                return *this;
+            }
+
+            bool operator!=(const ConstIterator &other) const
+            {
+                return m_it != other.m_it;
+            }
+
+            // Accessors
+            reference operator*()
+            {
+                return *m_it;
+            }
+
+            pointer operator->() const
+            {
+                return &(operator*());
+            }
+        };
+
+        ConstIterator begin() const
+        {
+            return ConstIterator(m_storage.begin());
+        }
+
+
+        ConstIterator end() const
+        {
+            return ConstIterator(m_storage.end());
+        }
+
     };
 } // namespace rg

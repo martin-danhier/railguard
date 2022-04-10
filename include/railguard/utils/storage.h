@@ -121,14 +121,70 @@ namespace rg
             }
         };
 
-        [[nodiscard]] Iterator begin() const
+        [[nodiscard]] Iterator begin()
         {
             return Iterator(m_map.begin());
         }
 
-        [[nodiscard]] Iterator end() const
+        [[nodiscard]] Iterator end()
         {
             return Iterator(m_map.end());
+        }
+
+        // Const iterator
+
+        class ConstIterator
+        {
+          public:
+            // Traits
+            using iterator_category = std::forward_iterator_tag;
+            using value_type        = typename Map<T>::Entry;
+            using difference_type   = std::ptrdiff_t;
+            using pointer           = const value_type *;
+            using reference         = const value_type &;
+
+          private:
+            typename Map<T>::ConstIterator m_it;
+
+          public:
+            // Contents
+
+            explicit ConstIterator(typename Map<T>::ConstIterator &&it) : m_it(std::move(it))
+            {
+            }
+
+            ConstIterator &operator++()
+            {
+                ++m_it;
+                return *this;
+            }
+
+            [[nodiscard]] bool operator!=(const ConstIterator &other) const
+            {
+                return m_it != other.m_it;
+            }
+
+            // Access
+
+            [[nodiscard]] reference operator*()
+            {
+                return *m_it;
+            }
+
+            [[nodiscard]] pointer operator->() const
+            {
+                return &*m_it;
+            }
+        };
+
+        [[nodiscard]] ConstIterator begin() const
+        {
+            return ConstIterator(m_map.begin());
+        }
+
+        [[nodiscard]] ConstIterator end() const
+        {
+            return ConstIterator(m_map.end());
         }
     };
 

@@ -79,7 +79,7 @@ namespace rg
         // We will use that one.
         if (count != nullptr)
         {
-            // Increment count, if provided
+            // Increment size, if provided
             (*count)++;
         }
         entries[index].key   = key;
@@ -264,7 +264,7 @@ namespace rg
             // We keep iterating because now, the slots are disconnected from the base index
             // If the deleted slot is not NULL, then we are between it and the NULL key
             // The current slot may then become inaccessible. We need to invalidate it.
-            // For that, we need to count the number of slots between the deleted slot and the NULL key
+            // For that, we need to size the number of slots between the deleted slot and the NULL key
             if (deleted_slot != nullptr)
             {
                 invalidated_block_size++;
@@ -316,7 +316,7 @@ namespace rg
                 .value = {.as_ptr = nullptr},
             };
 
-            // Decrement the count.
+            // Decrement the size.
             m_data->count--;
 
             // If we have slots to invalidate, add them back

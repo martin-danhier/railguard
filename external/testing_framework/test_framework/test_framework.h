@@ -45,6 +45,8 @@ extern "C"
 
 #define EXPECT_NULL(pointer) do { if (!tf_assert_null(___context___, __LINE__, __FILE__, (pointer), true)) return; } while (0)
 
+#define ERROR(message) do { if (!tf_assert_error(___context___, __LINE__, __FILE__, (message), true)) return; } while (0)
+
 // Asserts: non-recoverable if false
 #define ASSERT_TRUE(condition) do { if (!tf_assert_true(___context___, __LINE__, __FILE__, (condition), false)) return; } while (0)
 
@@ -53,6 +55,8 @@ extern "C"
 #define ASSERT_NOT_NULL(pointer) do { if (!tf_assert_not_null(___context___, __LINE__, __FILE__, (pointer), false)) return; } while (0)
 
 #define ASSERT_NULL(pointer) do { if (!tf_assert_null(___context___, __LINE__, __FILE__, (pointer), false)) return; } while (0)
+
+#define ERROR_AND_QUIT(message) do { if (!tf_assert_error(___context___, __LINE__, __FILE__, (message), false)) return; } while (0)
 
     // clang-format on
 
@@ -85,6 +89,8 @@ extern "C"
     bool tf_assert_not_null(tf_context *context, size_t line_number, const char *file, void *pointer, bool recoverable);
 
     bool tf_assert_null(tf_context *context, size_t line_number, const char *file, void *pointer, bool recoverable);
+
+    bool tf_assert_error(tf_context *context, size_t line_number, const char *file, const char *message, bool recoverable);
 
 #ifdef __cplusplus
 }

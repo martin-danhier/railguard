@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  0)
-set(enable_ubsan 0)
+set(enable_asan  1)
+set(enable_ubsan 1)
 
 # Enable/disable interactivity
 # Setting this to 0 will add timers to ensure that no test is blocked in a loop, waiting for user input.
@@ -50,15 +50,18 @@ set(railguard_lib_sources
     src/utils/hash_map.cpp
     src/utils/io.cpp
     src/utils/geometry/transform.cpp
+    src/utils/geometry/mat4.cpp
+    src/utils/geometry/quat.cpp
+    src/utils/vulkan/descriptor_set_helpers.cpp
     include/railguard/utils/geometry/vec3.h
-    include/railguard/utils/geometry/quat.h
     include/railguard/utils/array.h
     include/railguard/utils/map.h
     include/railguard/utils/vector.h
+    include/railguard/utils/array_like.h
     include/railguard/utils/optional.h
     include/railguard/utils/storage.h
     include/railguard/utils/event_sender.h
-        )
+)
 
 # Add header directories for main lib
 set(railguard_lib_header_dir

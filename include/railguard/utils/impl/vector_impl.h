@@ -86,6 +86,10 @@ namespace rg::_impl
             m_count = 0;
         }
 
+        [[nodiscard]] inline void *data() const {
+            return m_data;
+        }
+
     };
 
 } // namespace rg::_impl

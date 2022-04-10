@@ -8,13 +8,16 @@ TEST
     rg::Vector<rg::Vector<int>> v(5);
 
     // Create sub vector with && rvalue
-    v.push_back(rg::Vector<int>(3));
+    auto v2 = rg::Vector<int>(3);
+    v.push_back(v2);
 
     // We should be able to push m_data into it
     v[0].push_back(1);
     v[0].push_back(3);
 
     // And retrieve it
+    auto v3 = v[0];
+    EXPECT_TRUE(v3[0] == 1);
     EXPECT_TRUE(v[0][0] == 1);
     EXPECT_TRUE(v[0][1] == 3);
 
