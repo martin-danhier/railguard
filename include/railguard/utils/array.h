@@ -140,6 +140,15 @@ namespace rg
             return m_data;
         }
 
+        void fill(const T &value)
+        {
+            for (size_t i = 0; i < m_count; ++i)
+            {
+                // They all exist so we use the update operator
+                m_data[i] = value;
+            }
+        }
+
         // Other methods
         bool includes(const T &value) const
         {

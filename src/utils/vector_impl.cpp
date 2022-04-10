@@ -129,10 +129,14 @@ void VectorImpl::ensure_capacity(size_t required_minimum_capacity)
 
         // Create new buffer
         char *new_data = new char[new_capacity * m_element_size];
-        // Copy old m_data to new buffer
-        memcpy(new_data, m_data, m_count * m_element_size);
-        // Delete old buffer
-        delete[] m_data;
+
+        if (m_data != nullptr)
+        {
+            // Copy old m_data to new buffer
+            memcpy(new_data, m_data, m_count * m_element_size);
+            // Delete old buffer
+            delete[] m_data;
+        }
 
         // Save
         m_data     = new_data;

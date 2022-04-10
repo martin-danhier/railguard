@@ -285,6 +285,8 @@ if (DEFINED RENDERER_VULKAN)
         "${shaders_directory}/*.vert"
     )
 
+    target_sources(tests PRIVATE ${glsl_source_files})
+
     # Iterate each shader
     foreach(glsl ${glsl_source_files})
         get_filename_component(file_name ${glsl} NAME)

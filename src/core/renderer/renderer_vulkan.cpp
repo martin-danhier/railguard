@@ -9,6 +9,7 @@
 #include <railguard/utils/io.h>
 #include <railguard/utils/storage.h>
 
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <volk.h>
@@ -20,7 +21,7 @@
 // ---==== Defines ====---
 
 #define NB_OVERLAPPING_FRAMES   3
-#define VULKAN_API_VERSION      VK_API_VERSION_1_1
+#define VULKAN_API_VERSION      VK_API_VERSION_1_3
 #define WAIT_FOR_FENCES_TIMEOUT 1000000000
 #define SEMAPHORE_TIMEOUT       1000000000
 #define RENDER_STAGE_COUNT      2
@@ -56,6 +57,7 @@ namespace rg
     {
       private:
         VmaAllocator m_allocator = VK_NULL_HANDLE;
+        VkDevice     m_device    = VK_NULL_HANDLE;
 
       public:
         Allocator() = default;
@@ -65,17 +67,16 @@ namespace rg
 
         ~Allocator();
 
-        AllocatedImage create_image(VkDevice              device,
-                                    VkFormat              image_format,
-                                    VkExtent3D            image_extent,
-                                    VkImageUsageFlags     image_usage,
-                                    VkImageAspectFlagBits image_aspect,
-                                    VmaMemoryUsage        memory_usage) const;
-        void           destroy_image(VkDevice device, AllocatedImage &image) const;
+        [[nodiscard]] AllocatedImage create_image(VkFormat              image_format,
+                                                  VkExtent3D            image_extent,
+                                                  VkImageUsageFlags     image_usage,
+                                                  VkImageAspectFlagBits image_aspect,
+                                                  VmaMemoryUsage        memory_usage) const;
+        void                         destroy_image(AllocatedImage &image) const;
 
         [[nodiscard]] AllocatedBuffer
               create_buffer(size_t allocation_size, VkBufferUsageFlags buffer_usage, VmaMemoryUsage memory_usage) const;
-        void  destroy_buffer(VkDevice device, AllocatedBuffer &buffer) const;
+        void  destroy_buffer(AllocatedBuffer &buffer) const;
         void *map_buffer(AllocatedBuffer &buffer) const;
         void  unmap_buffer(AllocatedBuffer &buffer) const;
     };
@@ -157,9 +158,10 @@ namespace rg
 
     struct RenderBatch
     {
-        size_t     offset   = 0;
-        size_t     count    = 0;
-        VkPipeline pipeline = VK_NULL_HANDLE;
+        size_t           offset          = 0;
+        size_t           count           = 0;
+        VkPipeline       pipeline        = VK_NULL_HANDLE;
+        VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     };
 
     struct RenderStage
@@ -182,11 +184,17 @@ namespace rg
         VkSemaphore     present_semaphore = VK_NULL_HANDLE;
         VkSemaphore     render_semaphore  = VK_NULL_HANDLE;
         VkFence         render_fence      = VK_NULL_HANDLE;
-    };
 
-    struct SwapchainFrameData
-    {
-        VkDescriptorSet swapchain_set = VK_NULL_HANDLE;
+        // Descriptor sets
+
+        // One descriptor pool per frame: that way we can just reset the pool to free all sets of the frame
+        DynamicDescriptorPool descriptor_pool = {};
+        // Used to determine whether the sets should be rebuilt
+        uint64_t built_buffers_config_version = 0;
+
+        // Per-swapchain sets and buffers. Dynamic over swapchains
+        AllocatedBuffer camera_info_buffer = {};
+        VkDescriptorSet swapchain_set      = VK_NULL_HANDLE;
     };
 
     struct Queue
@@ -221,9 +229,6 @@ namespace rg
         // Since vulkan handles are just pointers, a hash map is all we need
         HashMap  pipelines             = {};
         uint64_t built_effects_version = 0;
-        // Camera info uniform buffer
-        AllocatedBuffer           camera_info_buffer = {};
-        Array<SwapchainFrameData> frames             = {};
 
         // Render stages
         Array<RenderStage> render_stages = {};
@@ -231,12 +236,13 @@ namespace rg
 
     struct Renderer::Data
     {
-        VkInstance       instance        = VK_NULL_HANDLE;
-        VkDevice         device          = VK_NULL_HANDLE;
-        VkPhysicalDevice physical_device = VK_NULL_HANDLE;
-        Queue            graphics_queue  = {};
-        Allocator        allocator       = {};
-        Passes           passes          = {};
+        VkInstance                 instance          = VK_NULL_HANDLE;
+        VkDevice                   device            = VK_NULL_HANDLE;
+        VkPhysicalDevice           physical_device   = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties device_properties = {};
+        Queue                      graphics_queue    = {};
+        Allocator                  allocator         = {};
+        Passes                     passes            = {};
 #ifdef USE_VK_VALIDATION_LAYERS
         VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 #endif
@@ -244,7 +250,8 @@ namespace rg
          * @brief Fixed-size array containing the swapchains.
          * We place them in a array to be able to efficiently iterate through them.
          */
-        Array<Swapchain> swapchains = {};
+        Array<Swapchain> swapchains         = {};
+        size_t           swapchain_capacity = 0;
 
         // Counter of frame since the start of the renderer
         uint64_t  current_frame_number          = 1;
@@ -259,14 +266,17 @@ namespace rg
         Storage<RenderNode>       render_nodes       = {};
         Storage<Camera>           cameras            = {};
 
-        // Descriptor pool
-        DynamicDescriptorPool descriptor_pool              = {};
-        VkDescriptorSetLayout global_descriptor_set_layout = VK_NULL_HANDLE;
+        // Descriptor layouts
+        VkDescriptorSetLayout swapchain_set_layout = VK_NULL_HANDLE;
 
         // Number incremented at each created shader effect
         // It is stored in the swapchain when effects are built
         // If the number in the swapchain is different, we need to rebuild the pipelines
         uint64_t effects_version = 0;
+        // Same principle for descriptor sets
+        // It is updated when buffer or texture combinations change
+        // Frames that are out of date will be rebuilt
+        uint64_t buffer_config_version = 0;
 
         // ------------ Methods ------------
 
@@ -291,13 +301,15 @@ namespace rg
         void                     clear_pipelines(Swapchain &swapchain) const;
         void                     recreate_pipelines(Swapchain &swapchain) const;
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
+        void                     update_descriptor_sets(FrameData &frame);
 
         void update_stage_cache(Swapchain &swapchain);
 
-        void send_camera_data(Swapchain &swapchain, const Camera &camera) const;
+        void send_camera_data(size_t window_index, const Camera &camera, FrameData &current_frame);
 
+        void draw_from_cache(const RenderStage &stage, VkCommandBuffer cmd, FrameData &current_frame, size_t window_index) const;
         template<typename T>
-        void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, bool apply_padding = false);
+        void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset = 0);
         [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
     };
 
@@ -314,6 +326,7 @@ namespace rg
             case VK_SUCCESS: return "VK_SUCCESS";
             case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
             case VK_ERROR_NATIVE_WINDOW_IN_USE_KHR: return "VK_ERROR_NATIVE_WINDOW_IN_USE_KHR";
+            case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
             case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
             case VK_TIMEOUT: return "VK_TIMEOUT";
             default: return std::to_string(result);
@@ -547,6 +560,12 @@ namespace rg
         vkGetPhysicalDeviceProperties(device, &device_properties);
         vkGetPhysicalDeviceFeatures(device, &device_features);
 
+        // Prefer something else than llvmpipe, which is testing use only
+        if (!std::string(device_properties.deviceName).starts_with("llvmpipe"))
+        {
+            score += 15000;
+        }
+
         // Prefer discrete gpu when available
         if (device_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
         {
@@ -576,7 +595,7 @@ namespace rg
 
     // region Allocator
 
-    Allocator::Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device)
+    Allocator::Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device) : m_device(device)
     {
         VmaVulkanFunctions vulkan_functions = {
             .vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties,
@@ -621,7 +640,7 @@ namespace rg
         }
     }
 
-    Allocator::Allocator(Allocator &&other) noexcept : m_allocator(other.m_allocator)
+    Allocator::Allocator(Allocator &&other) noexcept : m_allocator(other.m_allocator), m_device(other.m_device)
     {
         other.m_allocator = VK_NULL_HANDLE;
     }
@@ -636,13 +655,13 @@ namespace rg
                 m_allocator = VK_NULL_HANDLE;
             }
             m_allocator       = other.m_allocator;
+            m_device          = other.m_device;
             other.m_allocator = VK_NULL_HANDLE;
         }
         return *this;
     }
 
-    AllocatedImage Allocator::create_image(VkDevice              device,
-                                           VkFormat              image_format,
+    AllocatedImage Allocator::create_image(VkFormat              image_format,
                                            VkExtent3D            image_extent,
                                            VkImageUsageFlags     image_usage,
                                            VkImageAspectFlagBits image_aspect,
@@ -705,14 +724,14 @@ namespace rg
                     1,
                 },
         };
-        vk_check(vkCreateImageView(device, &image_view_create_info, nullptr, &image.image_view), "Failed to create image view");
+        vk_check(vkCreateImageView(m_device, &image_view_create_info, nullptr, &image.image_view), "Failed to create image view");
 
         return image;
     }
 
-    void Allocator::destroy_image(VkDevice device, AllocatedImage &image) const
+    void Allocator::destroy_image(AllocatedImage &image) const
     {
-        vkDestroyImageView(device, image.image_view, nullptr);
+        vkDestroyImageView(m_device, image.image_view, nullptr);
         vmaDestroyImage(m_allocator, image.image, image.allocation);
         image.image      = VK_NULL_HANDLE;
         image.allocation = VK_NULL_HANDLE;
@@ -752,7 +771,7 @@ namespace rg
         return buffer;
     }
 
-    void Allocator::destroy_buffer(VkDevice device, AllocatedBuffer &buffer) const
+    void Allocator::destroy_buffer(AllocatedBuffer &buffer) const
     {
         if (buffer.buffer != VK_NULL_HANDLE)
         {
@@ -776,31 +795,25 @@ namespace rg
     }
 
     template<typename T>
-    void Renderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, bool apply_padding)
+    void Renderer::Data::copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset)
     {
         // Copy the data to the GPU
         char *data = static_cast<char *>(allocator.map_buffer(dst));
 
         // Pad the data if needed
-        if (apply_padding)
+        if (offset != 0)
         {
-            // TODO really necessary?
-            auto frame_index = get_current_frame_index();
-            data += pad_uniform_buffer_size(sizeof(T)) * frame_index;
+            data += pad_uniform_buffer_size(sizeof(T)) * offset;
         }
 
-        memcpy(data, &src, dst.size);
+        memcpy(data, &src, sizeof(T));
         allocator.unmap_buffer(dst);
     }
 
     size_t Renderer::Data::pad_uniform_buffer_size(size_t original_size) const
     {
-        // Get GPU properties
-        VkPhysicalDeviceProperties device_properties;
-        vkGetPhysicalDeviceProperties(physical_device, &device_properties);
-
         // Get the alignment requirement
-        size_t min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
+        const size_t &min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
         size_t aligned_size  = original_size;
         if (min_alignment > 0)
         {
@@ -957,7 +970,7 @@ namespace rg
         }
 
         // Destroy depth image
-        allocator.destroy_image(device, swapchain.depth_image);
+        allocator.destroy_image(swapchain.depth_image);
 
         // Destroy images
         for (uint32_t i = 0; i < swapchain.image_count; i++)
@@ -979,12 +992,14 @@ namespace rg
             // Unregister window events
             swapchain.target_window->on_resize()->unsubscribe(swapchain.window_resize_event_handler_id);
 
+            // Destroy descriptor sets
+
             // Destroy render stages
             for (auto &stage : swapchain.render_stages)
             {
                 if (stage.indirect_buffer.is_valid())
                 {
-                    allocator.destroy_buffer(device, stage.indirect_buffer);
+                    allocator.destroy_buffer(stage.indirect_buffer);
                 }
             }
 
@@ -1092,8 +1107,7 @@ namespace rg
 
         VkExtent3D depth_image_extent = {extent.width, extent.height, 1};
         swapchain.depth_image_format  = VK_FORMAT_D32_SFLOAT;
-        swapchain.depth_image         = allocator.create_image(device,
-                                                       swapchain.depth_image_format,
+        swapchain.depth_image         = allocator.create_image(swapchain.depth_image_format,
                                                        depth_image_extent,
                                                        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
                                                        VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -1170,6 +1184,35 @@ namespace rg
         }
 
         return image_index;
+    }
+
+    // endregion
+
+    // region Descriptor sets functions
+
+    void Renderer::Data::update_descriptor_sets(FrameData &frame)
+    {
+        // If the built version is out of date, rebuild
+        // Otherwise, we can just reuse the descriptor sets from the last frame
+        if (frame.built_buffers_config_version < buffer_config_version)
+        {
+            // Reset pool
+            vk_check(frame.descriptor_pool.reset());
+            frame.swapchain_set = VK_NULL_HANDLE;
+
+            // Create descriptor sets for all swapchains
+            uint32_t camera_buffer_size = pad_uniform_buffer_size(sizeof(GPUCameraData));
+
+            vk_check(
+                DescriptorSetBuilder(device, frame.descriptor_pool)
+                    .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT, frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
+                    .save_descriptor_set(&swapchain_set_layout, &frame.swapchain_set)
+                    .build(),
+                "Couldn't build descriptor sets.");
+
+            // Update built version
+            frame.built_buffers_config_version = buffer_config_version;
+        }
     }
 
     // endregion
@@ -1513,6 +1556,7 @@ namespace rg
                                         stage_models.size(),
                                         material.value().models_using_material.size(),
                                         static_cast<VkPipeline>(pipeline.value()->as_ptr),
+                                        effect.value().pipeline_layout,
                                     });
 
                                     // Add the models using that material
@@ -1542,7 +1586,7 @@ namespace rg
                 // If it exists but isn't big enough, recreate it
                 else if (stage.indirect_buffer.size < required_indirect_buffer_size)
                 {
-                    allocator.destroy_buffer(device, stage.indirect_buffer);
+                    allocator.destroy_buffer(stage.indirect_buffer);
                     stage.indirect_buffer =
                         allocator.create_buffer(required_indirect_buffer_size, indirect_buffer_usage, indirect_buffer_memory_usage);
                 }
@@ -1559,7 +1603,7 @@ namespace rg
                     const auto model    = models.get(model_id);
                     check(model.has_value(), "Tried to draw a model that doesn't exist.");
 
-                    indirect_commands[i].vertexCount   = 3; // TODO when mesh is added
+                    indirect_commands[i].vertexCount   = 8; // TODO when mesh is added
                     indirect_commands[i].firstVertex   = 0;
                     indirect_commands[i].instanceCount = 1; // TODO when instances are added
                     indirect_commands[i].firstInstance = 0;
@@ -1569,10 +1613,20 @@ namespace rg
             }
         }
     }
-    void draw_from_cache(const RenderStage &stage, VkCommandBuffer cmd)
+    void Renderer::Data::draw_from_cache(const RenderStage &stage,
+                                         VkCommandBuffer    cmd,
+                                         FrameData         &current_frame,
+                                         size_t             window_index) const
     {
-        constexpr uint32_t draw_stride    = sizeof(VkDrawIndirectCommand);
-        VkPipeline         bound_pipeline = VK_NULL_HANDLE;
+        constexpr uint32_t draw_stride         = sizeof(VkDrawIndirectCommand);
+        VkPipeline         bound_pipeline      = VK_NULL_HANDLE;
+        VkDescriptorSet    bound_swapchain_set = VK_NULL_HANDLE;
+
+        if (stage.batches.is_empty())
+        {
+            // Nothing to draw
+            return;
+        }
 
         // For each batch
         for (const auto &batch : stage.batches)
@@ -1582,6 +1636,22 @@ namespace rg
             {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, batch.pipeline);
                 bound_pipeline = batch.pipeline;
+            }
+
+            // The first iteration, bind global sets
+            if (bound_swapchain_set == VK_NULL_HANDLE)
+            {
+                uint32_t              camera_buffer_offset = pad_uniform_buffer_size(sizeof(GPUCameraData)) * window_index;
+                const Array<uint32_t> offsets              = {camera_buffer_offset};
+                vkCmdBindDescriptorSets(cmd,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        batch.pipeline_layout,
+                                        0,
+                                        1,
+                                        &current_frame.swapchain_set,
+                                        offsets.size(),
+                                        offsets.data());
+                bound_swapchain_set = current_frame.swapchain_set;
             }
 
             // Draw the batch
@@ -1595,10 +1665,11 @@ namespace rg
 
     // region Camera functions
 
-    void Renderer::Data::send_camera_data(Swapchain &swapchain, const Camera &camera) const
+    void Renderer::Data::send_camera_data(size_t window_index, const Camera &camera, FrameData &current_frame)
     {
         // Get camera infos and send them to the shader
         GPUCameraData camera_data = {};
+        Swapchain    &swapchain   = swapchains[window_index];
 
         // Projection
         switch (camera.type)
@@ -1625,9 +1696,8 @@ namespace rg
         camera_data.view_projection = camera_data.projection * camera_data.view;
 
         // Copy it to buffer
-        //        copy_buffer_to_gpu(camera_data, )
+        copy_buffer_to_gpu(camera_data, current_frame.camera_info_buffer, window_index);
     }
-
     // endregion
 
     // ---==== Renderer ====---
@@ -1638,6 +1708,9 @@ namespace rg
                        uint32_t       window_capacity)
         : m_data(new Data)
     {
+        std::cout << "Using Vulkan backend, version " << VK_API_VERSION_MAJOR(VULKAN_API_VERSION) << "."
+                  << VK_API_VERSION_MINOR(VULKAN_API_VERSION) << "\n";
+
         // Initialize volk
         vk_check(volkInitialize(), "Couldn't initialize Volk.");
 
@@ -1791,6 +1864,9 @@ namespace rg
 
             // If we didn't find a graphics queue, we can't continue
             check(found_graphics_queue, "Unable to find a graphics queue family_index.");
+
+            // Get GPU properties
+            vkGetPhysicalDeviceProperties(m_data->physical_device, &m_data->device_properties);
         }
 
         // endregion
@@ -1850,7 +1926,8 @@ namespace rg
         // --=== Swapchains ===--
 
         // We need to create an array big enough to hold all the swapchains.
-        m_data->swapchains = Array<Swapchain>(window_capacity);
+        m_data->swapchains         = Array<Swapchain>(window_capacity);
+        m_data->swapchain_capacity = window_capacity;
 
         // --=== Render passes ===--
 
@@ -1947,14 +2024,6 @@ namespace rg
         }
         // endregion
 
-        // --=== Descriptors setup ===--
-
-        // region Descriptors setup
-
-        m_data->descriptor_pool = DynamicDescriptorPool(m_data->device, {3, 3});
-
-        // endregion
-
         // --=== Init frames ===--
 
         // region Init frames
@@ -2005,6 +2074,21 @@ namespace rg
                          "Couldn't create image available semaphore");
                 vk_check(vkCreateSemaphore(m_data->device, &semaphore_create_info, nullptr, &frame.render_semaphore),
                          "Couldn't create render semaphore");
+
+                // Create buffers
+                frame.camera_info_buffer = m_data->allocator.create_buffer(m_data->pad_uniform_buffer_size(sizeof(GPUCameraData))
+                                                                               * m_data->swapchain_capacity,
+                                                                           VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                                           VMA_MEMORY_USAGE_CPU_TO_GPU);
+
+                // Create descriptor pool
+                frame.descriptor_pool =
+                    DynamicDescriptorPool(m_data->device,
+                                          DescriptorBalance {static_cast<uint32_t>(m_data->swapchain_capacity * 2), 0});
+
+                // Init sets
+                m_data->buffer_config_version++;
+                m_data->update_descriptor_sets(frame);
             }
         }
         // endregion
@@ -2025,9 +2109,17 @@ namespace rg
         // Wait for all frames to finish rendering
         m_data->wait_for_all_fences();
 
+        // Destroy descriptor layouts
+        vkDestroyDescriptorSetLayout(m_data->device, m_data->swapchain_set_layout, nullptr);
+
         // Clear frames
-        for (const auto &frame : m_data->frames)
+        for (auto &frame : m_data->frames)
         {
+            // Destroy pool
+            frame.descriptor_pool.clear();
+            // Destroy buffers
+            m_data->allocator.destroy_buffer(frame.camera_info_buffer);
+
             // Destroy semaphores
             vkDestroySemaphore(m_data->device, frame.present_semaphore, nullptr);
             vkDestroySemaphore(m_data->device, frame.render_semaphore, nullptr);
@@ -2038,9 +2130,6 @@ namespace rg
             // Destroy command pool
             vkDestroyCommandPool(m_data->device, frame.command_pool, nullptr);
         }
-
-        // Destroy descriptor layouts
-        vkDestroyDescriptorSetLayout(m_data->device, m_data->global_descriptor_set_layout, nullptr);
 
         // Clear storages
         clear_render_nodes();
@@ -2280,12 +2369,14 @@ namespace rg
         ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
 
         // Create pipeline layout
+        const Array<VkDescriptorSetLayout> descriptor_set_layouts = {m_data->swapchain_set_layout};
+
         VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext                  = nullptr,
             .flags                  = 0,
-            .setLayoutCount         = 0,
-            .pSetLayouts            = nullptr,
+            .setLayoutCount         = static_cast<uint32_t>(descriptor_set_layouts.size()),
+            .pSetLayouts            = descriptor_set_layouts.data(),
             .pushConstantRangeCount = 0,
             .pPushConstantRanges    = nullptr,
         };
@@ -2492,6 +2583,9 @@ namespace rg
         // Wait for the fence
         m_data->wait_for_fence(current_frame.render_fence);
 
+        // Update the descriptor sets if needed
+        m_data->update_descriptor_sets(current_frame);
+
         // For each enabled camera
         for (auto &cam_entry : m_data->cameras)
         {
@@ -2503,7 +2597,7 @@ namespace rg
                 check(swapchain.enabled, "Active camera tries to render to a disabled swapchain.");
 
                 // Get camera infos and send them to the shader
-                m_data->send_camera_data(swapchain, camera);
+                m_data->send_camera_data(camera.target_swapchain_index, camera, current_frame);
 
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
@@ -2520,8 +2614,10 @@ namespace rg
                 // Geometric pass TODO
 
                 // Lighting pass
+                float flash = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
+                float flash2 = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
                 VkClearValue clear_value = {
-                    .color = {.float32 = {0.0f, 0.0f, 0.0f, 1.0f}},
+                    .color = {.float32 = {1 - flash, flash2, flash, 1.0f}},
                 };
                 VkRenderPassBeginInfo render_pass_begin_info = {
                     .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2539,7 +2635,10 @@ namespace rg
                 vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
                 // Draw
-                draw_from_cache(swapchain.render_stages[1], current_frame.command_buffer);
+                m_data->draw_from_cache(swapchain.render_stages[1],
+                                        current_frame.command_buffer,
+                                        current_frame,
+                                        camera.target_swapchain_index);
 
                 vkCmdEndRenderPass(current_frame.command_buffer);
 

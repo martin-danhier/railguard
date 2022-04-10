@@ -26,7 +26,7 @@ namespace rg
     struct DynamicDescriptorPool::Data
     {
         // Store pools in a vector, add them when more sets are allocated than the capacity of the pool
-        Vector<VkDescriptorPool> descriptor_pools;
+        Vector<VkDescriptorPool> descriptor_pools{1};
         // Device to be able to call functions
         VkDevice          device              = VK_NULL_HANDLE;
         DescriptorBalance remaining_capacity  = {};
@@ -42,18 +42,15 @@ namespace rg
     {
         m_data->device              = device;
         m_data->single_pool_balance = balance;
-        m_data->remaining_capacity  = balance;
+        // We start with empty capacity
+        m_data->remaining_capacity  = {};
     }
 
     DynamicDescriptorPool::~DynamicDescriptorPool()
     {
         if (m_data != nullptr)
         {
-            // Destroy all pools
-            for (auto &pool : m_data->descriptor_pools)
-            {
-                vkDestroyDescriptorPool(m_data->device, pool, nullptr);
-            }
+            clear();
 
             delete m_data;
             m_data = nullptr;
@@ -96,11 +93,12 @@ namespace rg
         VkDescriptorPoolCreateInfo pool_info = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             // Max case: one descriptor per set
+            .flags         = 0,
             .maxSets       = single_pool_balance.total(),
             .poolSizeCount = static_cast<uint32_t>(pool_sizes.size()),
             .pPoolSizes    = pool_sizes.data(),
         };
-        VkDescriptorPool pool;
+        VkDescriptorPool pool = VK_NULL_HANDLE;
         handle(vkCreateDescriptorPool(device, &pool_info, nullptr, &pool));
 
         // Add the pool to the vector
@@ -138,13 +136,13 @@ namespace rg
             for (auto i = index; i < set_balances.size(); i++)
             {
                 // There is enough room
-                if (set_balances[i] + total_allocated_balance >= m_data->remaining_capacity)
+                if (m_data->remaining_capacity >= set_balances[i] + total_allocated_balance)
                 {
                     sets_to_allocate++;
                     total_allocated_balance += set_balances[i];
                 }
                 // It doesn't fit in any pool
-                else if (m_data->single_pool_balance >= set_balances[i])
+                else if (!(m_data->single_pool_balance >= set_balances[i]))
                 {
                     return VK_ERROR_OUT_OF_POOL_MEMORY;
                 }
@@ -165,7 +163,7 @@ namespace rg
             // Update allocation info
             allocate_info.descriptorPool     = m_data->descriptor_pools.last();
             allocate_info.descriptorSetCount = sets_to_allocate;
-            allocate_info.pSetLayouts        = layouts.data() + index;
+            allocate_info.pSetLayouts        = &layouts[index];
 
             // Allocate the descriptors
 
@@ -176,7 +174,7 @@ namespace rg
             // Copy the allocated sets to the target array
             for (size_t i = 0; i < sets_to_allocate; i++)
             {
-                target_sets[index + i] = &allocated_sets[i];
+                *target_sets[index + i] = allocated_sets[i];
             }
 
             // Update counters
@@ -202,6 +200,22 @@ namespace rg
         return *this;
     }
 
+    void DynamicDescriptorPool::clear() const
+    {
+        if (m_data != nullptr){
+            // Destroy all pools
+            for (auto &pool : m_data->descriptor_pools)
+            {
+                vkDestroyDescriptorPool(m_data->device, pool, nullptr);
+            }
+
+            m_data->remaining_capacity = {};
+            m_data->single_pool_balance = {};
+
+            m_data->descriptor_pools.clear();
+        }
+    }
+
     // endregion DynamicDescriptorPool
 
     // ---- Set builder
@@ -221,6 +235,7 @@ namespace rg
         Vector<size_t>                       binding_counts {2};
         Vector<VkDescriptorSetLayoutBinding> current_bindings {3};
         DescriptorBalance                    current_balance = {};
+        Vector<VkDescriptorBufferInfo>       buffer_infos {2};
         Vector<VkWriteDescriptorSet>         write_descriptor_sets {2};
         Vector<DescriptorBalance>            balances {2};
     };
@@ -230,6 +245,7 @@ namespace rg
     DescriptorSetBuilder::DescriptorSetBuilder(VkDevice device, DynamicDescriptorPool &pool) : m_data(new Data)
     {
         m_data->pool = &pool;
+        m_data->device = device;
     }
 
     DescriptorSetBuilder::~DescriptorSetBuilder()
@@ -241,13 +257,13 @@ namespace rg
     DescriptorSetBuilder &DescriptorSetBuilder::add_buffer(VkShaderStageFlags stages,
                                                            VkDescriptorType   type,
                                                            VkBuffer           buffer,
-                                                           size_t             offset,
-                                                           size_t             range)
+                                                           size_t             range,
+                                                           size_t             offset)
     {
         uint32_t binding_index = m_data->current_bindings.size();
 
         // Set binding
-        m_data->current_bindings.push_back({
+        m_data->current_bindings.push_back(VkDescriptorSetLayoutBinding{
             .binding            = binding_index,
             .descriptorType     = type,
             .descriptorCount    = 1,
@@ -256,11 +272,11 @@ namespace rg
         });
 
         // Set buffer info
-        VkDescriptorBufferInfo buffer_info {
+        m_data->buffer_infos.push_back(VkDescriptorBufferInfo{
             .buffer = buffer,
             .offset = offset,
             .range  = range,
-        };
+        });
 
         // Set write
         m_data->write_descriptor_sets.push_back(VkWriteDescriptorSet {
@@ -272,7 +288,7 @@ namespace rg
             .descriptorCount  = 1,
             .descriptorType   = type,
             .pImageInfo       = nullptr,
-            .pBufferInfo      = &buffer_info,
+            .pBufferInfo      = &m_data->buffer_infos.last(),
             .pTexelBufferView = nullptr,
         });
 
@@ -288,29 +304,35 @@ namespace rg
     }
 
     DescriptorSetBuilder &
-        DescriptorSetBuilder::add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t offset, size_t range)
+        DescriptorSetBuilder::add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset)
     {
-        return add_buffer(stages, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, buffer, offset, range);
+        return add_buffer(stages, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, buffer, range, offset);
     }
 
     DescriptorSetBuilder &
-        DescriptorSetBuilder::add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t offset, size_t range)
+        DescriptorSetBuilder::add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset)
     {
-        return add_buffer(stages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, buffer, offset, range);
+        return add_buffer(stages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, buffer, range, offset);
     }
 
     DescriptorSetBuilder &DescriptorSetBuilder::save_descriptor_set(VkDescriptorSetLayout *layout, VkDescriptorSet *set)
     {
+
         // Create layout
-        VkDescriptorSetLayoutCreateInfo layout_info {
-            .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext        = nullptr,
-            .flags        = 0,
-            .bindingCount = static_cast<uint32_t>(m_data->current_bindings.size()),
-            .pBindings    = m_data->current_bindings.data(),
-        };
-        if (vkCreateDescriptorSetLayout(m_data->device, &layout_info, nullptr, layout) != VK_SUCCESS)
-            throw std::runtime_error("DescriptorSetBuilder::save_descriptor_set: failed to create descriptor set layout");
+        // If layout is not null, it is assumed to be already valid from before
+        // If it is not valid, too bad for you
+        if (*layout == VK_NULL_HANDLE)
+        {
+            VkDescriptorSetLayoutCreateInfo layout_info {
+                .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .pNext        = nullptr,
+                .flags        = 0,
+                .bindingCount = static_cast<uint32_t>(m_data->current_bindings.size()),
+                .pBindings    = m_data->current_bindings.data(),
+            };
+            if (vkCreateDescriptorSetLayout(m_data->device, &layout_info, nullptr, layout) != VK_SUCCESS)
+                throw std::runtime_error("DescriptorSetBuilder::save_descriptor_set: failed to create descriptor set layout");
+        }
 
         m_data->layouts.push_back(*layout);
         m_data->binding_counts.push_back(m_data->current_bindings.size());

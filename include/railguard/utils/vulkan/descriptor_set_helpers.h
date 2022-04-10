@@ -76,6 +76,8 @@ namespace rg
 
         // Methods
 
+        void clear() const;
+
         /**
          * Allocates the given descriptor sets using the given layouts.
          * */
@@ -105,9 +107,9 @@ namespace rg
         ~DescriptorSetBuilder();
 
         DescriptorSetBuilder &
-            add_buffer(VkShaderStageFlags stages, VkDescriptorType type, VkBuffer buffer, size_t offset, size_t range);
-        DescriptorSetBuilder &add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t offset, size_t range);
-        DescriptorSetBuilder &add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t offset, size_t range);
+            add_buffer(VkShaderStageFlags stages, VkDescriptorType type, VkBuffer buffer, size_t range, size_t offset=0);
+        DescriptorSetBuilder &add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset=0);
+        DescriptorSetBuilder &add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset=0);
 
         DescriptorSetBuilder &save_descriptor_set(VkDescriptorSetLayout *layout, VkDescriptorSet *set);
 

@@ -2,6 +2,7 @@
 #include <railguard/core/engine.h>
 #include <railguard/utils/array.h>
 #include <railguard/core/renderer.h>
+#include <railguard/utils/geometry/transform.h>
 
 TEST
 {
@@ -32,6 +33,8 @@ TEST
 
     // Create a camera
     auto camera = renderer.create_orthographic_camera(0, 500, 500, 0, 100);
+    auto &camera_transform = renderer.get_camera_transform(camera);
+    camera_transform.position().x() = 5;
 
     // Run engine
     EXPECT_NO_THROWS(engine.run_main_loop());
