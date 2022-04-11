@@ -10,6 +10,8 @@ namespace rg
     class Vec3;
     class Quat;
 
+    float radians(float degrees);
+
     class Mat4
     {
       private:
@@ -60,8 +62,8 @@ namespace rg
             return Mat4(
                 1.0f / (aspect * std::tan(fov / 2.0f)),    0.0f,                          0.0f,                               0.0f,
                 0.0f,                                      1.0f / std::tan(fov / 2.0f),   0.0f,                               0.0f,
-                0.0f,                                      0.0f,                          (far + near) / (near - far),       -1.0f,
-                0.0f,                                      0.0f,                          (2.0f * far * near) / (near - far), 0.0f
+                0.0f,                                      0.0f,                          far / (near - far),                   -1.0f,
+                0.0f,                                      0.0f,                          -((far * near) / far - near),             0.0f
             );
             // clang-format on
         }

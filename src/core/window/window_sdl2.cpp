@@ -25,6 +25,7 @@ struct Window::Data
     // Events
     EventSender<Extent2D>       resize_event;
     EventSender<std::nullptr_t> close_event;
+    EventSender<KeyEvent>       key_event;
 };
 
 // --==== UTILS FUNCTIONS ====--
@@ -107,6 +108,21 @@ void rg::Window::handle_events()
                 m_data->extent = new_extent;
             }
         }
+        // Key press
+        else if (event.type == SDL_KEYDOWN)
+        {
+            // TODO nice key handling
+            int32_t key = event.key.keysym.sym;
+            m_data->key_event.send(KeyEvent{key, true});
+
+        }
+        // Key release
+        else if (event.type == SDL_KEYUP)
+        {
+            // TODO nice key handling
+            int32_t key = event.key.keysym.sym;
+            m_data->key_event.send(KeyEvent{key, false});
+        }
         // Quit
         else if (event.type == SDL_QUIT)
         {
@@ -149,6 +165,11 @@ EventSender<std::nullptr_t> *rg::Window::on_close() const
     return &m_data->close_event;
 }
 
+EventSender<KeyEvent> *rg::Window::on_key_event() const
+{
+    return &m_data->key_event;
+}
+
 // Vulkan-specific
 
 #ifdef RENDERER_VULKAN
@@ -161,7 +182,7 @@ rg::Array<const char *> rg::Window::get_required_vulkan_extensions(uint32_t extr
 
     // Create an array with that number and fetch said extensions
     // We add the extra_array_size to allow the caller to add its own extensions at the end of the array
-    Array<const char*> required_extensions(required_extensions_count + extra_array_size);
+    Array<const char *> required_extensions(required_extensions_count + extra_array_size);
     sdl_check(SDL_Vulkan_GetInstanceExtensions(m_data->sdl_window, &required_extensions_count, required_extensions.data()));
 
     return required_extensions;
@@ -173,6 +194,7 @@ VkSurfaceKHR rg::Window::get_vulkan_surface(VkInstance vulkan_instance) const
     sdl_check(SDL_Vulkan_CreateSurface(m_data->sdl_window, vulkan_instance, &surface));
     return surface;
 }
+
 #endif
 
 #endif

@@ -31,8 +31,8 @@ set(CMAKE_C_STANDARD   11)
 set(CMAKE_CXX_STANDARD 20)
 
 # Shaders location
-set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders/")
-set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders/")
+set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders")
+set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders")
 
 # Enable tests
 enable_testing()

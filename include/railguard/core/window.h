@@ -24,6 +24,12 @@ namespace rg
         uint32_t height;
     };
 
+    struct KeyEvent {
+        // TODO do that better
+        int32_t key;
+        bool down;
+    };
+
     // Window handler. Points to a window object and provides functions to handle it.
     class Window
     {
@@ -58,6 +64,7 @@ namespace rg
         // Events
         [[nodiscard]] EventSender<Extent2D>       *on_resize() const;
         [[nodiscard]] EventSender<std::nullptr_t> *on_close() const;
+        [[nodiscard]] EventSender<KeyEvent>       *on_key_event() const;
 
         // Vulkan specific
 

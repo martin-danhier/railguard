@@ -128,4 +128,9 @@ namespace rg
         str = str + m;
         return str;
     }
+
+    float radians(float degrees)
+    {
+        return degrees * M_PIf32 / 180.0f;
+    }
 } // namespace rg

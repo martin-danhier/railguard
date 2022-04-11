@@ -208,6 +208,7 @@ namespace rg
         bool           enabled         = false;
         VkSwapchainKHR vk_swapchain    = VK_NULL_HANDLE;
         VkExtent2D     viewport_extent = {};
+        uint32_t       window_index    = 0;
         // Swapchain images
         uint32_t           image_count  = 0;
         VkSurfaceFormatKHR image_format = {};
@@ -293,7 +294,7 @@ namespace rg
         void                             destroy_swapchain(Swapchain &swapchain) const;
         void                             clear_swapchains();
         void                             init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const;
-        void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const;
+        void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent);
         uint32_t                         get_next_swapchain_image(Swapchain &swapchain) const;
 
         [[nodiscard]] VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const;
@@ -814,7 +815,7 @@ namespace rg
     {
         // Get the alignment requirement
         const size_t &min_alignment = device_properties.limits.minUniformBufferOffsetAlignment;
-        size_t aligned_size  = original_size;
+        size_t        aligned_size  = original_size;
         if (min_alignment > 0)
         {
             aligned_size = (aligned_size + min_alignment - 1) & ~(min_alignment - 1);
@@ -1140,7 +1141,7 @@ namespace rg
         // endregion
     }
 
-    void Renderer::Data::recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent) const
+    void Renderer::Data::recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent)
     {
         check(swapchain.enabled,
               "Attempted to recreate an non-existing swapchain. "
@@ -1157,6 +1158,16 @@ namespace rg
 
         // Recreate pipelines
         recreate_pipelines(swapchain);
+
+        // Update aspect ratio of cameras
+        for (auto &res : cameras)
+        {
+            auto &camera = res.value();
+            if (camera.target_swapchain_index == swapchain.window_index && camera.type == CameraType::PERSPECTIVE)
+            {
+                camera.perspective.aspect_ratio = static_cast<float>(new_extent.width) / static_cast<float>(new_extent.height);
+            }
+        }
     }
 
     uint32_t Renderer::Data::get_next_swapchain_image(Swapchain &swapchain) const
@@ -1603,7 +1614,7 @@ namespace rg
                     const auto model    = models.get(model_id);
                     check(model.has_value(), "Tried to draw a model that doesn't exist.");
 
-                    indirect_commands[i].vertexCount   = 8; // TODO when mesh is added
+                    indirect_commands[i].vertexCount   = 36; // TODO when mesh is added
                     indirect_commands[i].firstVertex   = 0;
                     indirect_commands[i].instanceCount = 1; // TODO when instances are added
                     indirect_commands[i].firstInstance = 0;
@@ -2183,6 +2194,7 @@ namespace rg
         // Get the window's surface
         swapchain.target_window = &window;
         swapchain.surface       = window.get_vulkan_surface(m_data->instance);
+        swapchain.window_index  = window_slot_index;
 
         // Check that the surface is supported
         VkBool32 surface_supported = false;
@@ -2614,8 +2626,8 @@ namespace rg
                 // Geometric pass TODO
 
                 // Lighting pass
-                float flash = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
-                float flash2 = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
+                float        flash       = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
+                float        flash2      = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
                 VkClearValue clear_value = {
                     .color = {.float32 = {1 - flash, flash2, flash, 1.0f}},
                 };
