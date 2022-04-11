@@ -1,10 +1,10 @@
 #ifdef RENDERER_VULKAN
+#include "glm/ext/matrix_clip_space.hpp"
 #include "railguard/core/renderer.h"
 #include <railguard/core/gpu_structs.h>
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
-#include <railguard/utils/geometry/mat4.h>
 #include <railguard/utils/geometry/transform.h>
 #include <railguard/utils/io.h>
 #include <railguard/utils/storage.h>
@@ -1119,13 +1119,16 @@ namespace rg
         // region Framebuffer creation
 
         swapchain.framebuffers = Array<VkFramebuffer>(effective_image_count);
+
+        VkImageView attachments[2] {};
+        attachments[1] = swapchain.depth_image.image_view;
         VkFramebufferCreateInfo framebuffer_create_info {
             .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
             .pNext           = nullptr,
             .flags           = 0,
             .renderPass      = passes.lighting_pass,
-            .attachmentCount = 1,
-            .pAttachments    = nullptr,
+            .attachmentCount = 2,
+            .pAttachments    = attachments,
             .width           = extent.width,
             .height          = extent.height,
             .layers          = 1,
@@ -1133,7 +1136,7 @@ namespace rg
 
         for (uint32_t i = 0; i < effective_image_count; i++)
         {
-            framebuffer_create_info.pAttachments = &swapchain.image_views[i];
+            attachments[0] = swapchain.image_views[i];
             vk_check(vkCreateFramebuffer(device, &framebuffer_create_info, nullptr, &swapchain.framebuffers[i]),
                      "Failed to create framebuffer");
         }
@@ -1416,13 +1419,14 @@ namespace rg
 
         // region Create depth stencil state
 
+        // Todo paremetrize
         VkPipelineDepthStencilStateCreateInfo depth_stencil_state_create_info = {
             .sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext                 = nullptr,
             .flags                 = 0,
-            .depthTestEnable       = VK_FALSE,
-            .depthWriteEnable      = VK_FALSE,
-            .depthCompareOp        = VK_COMPARE_OP_ALWAYS,
+            .depthTestEnable       = VK_TRUE,
+            .depthWriteEnable      = VK_TRUE,
+            .depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL,
             .depthBoundsTestEnable = false,
             .stencilTestEnable     = false,
             .minDepthBounds        = 0.0f,
@@ -1686,18 +1690,18 @@ namespace rg
         switch (camera.type)
         {
             case CameraType::PERSPECTIVE:
-                camera_data.projection = Mat4::perspective(camera.perspective.fov,
-                                                           camera.perspective.aspect_ratio,
-                                                           camera.perspective.near_plane,
-                                                           camera.perspective.far_plane);
+                camera_data.projection = glm::perspective(camera.perspective.fov,
+                                                          camera.perspective.aspect_ratio,
+                                                          camera.perspective.near_plane,
+                                                          camera.perspective.far_plane);
                 break;
             case CameraType::ORTHOGRAPHIC:
-                camera_data.projection = Mat4::orthographic(-camera.orthographic.width / 2.0f,
-                                                            camera.orthographic.width / 2.0f,
-                                                            -camera.orthographic.height / 2.0f,
-                                                            camera.orthographic.height / 2.0f,
-                                                            camera.orthographic.near_plane,
-                                                            camera.orthographic.far_plane);
+                camera_data.projection = glm::ortho(-camera.orthographic.width / 2.0f,
+                                                    camera.orthographic.width / 2.0f,
+                                                    -camera.orthographic.height / 2.0f,
+                                                    camera.orthographic.height / 2.0f,
+                                                    camera.orthographic.near_plane,
+                                                    camera.orthographic.far_plane);
                 break;
         }
 
@@ -2008,7 +2012,8 @@ namespace rg
                      "Couldn't create geometry render pass");
 
             // Create lighting render pass
-            VkAttachmentDescription lighting_attachment = {
+            VkAttachmentDescription lighting_attachments[2];
+            lighting_attachments[0] = {
                 // Format. We need high precision for position
                 .format = swapchain_image_format.format,
                 // No MSAA
@@ -2022,14 +2027,35 @@ namespace rg
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             };
-            VkAttachmentReference lighting_attachment_reference = {
+            VkAttachmentReference lighting_reference = {
                 .attachment = 0,
                 .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             };
-            subpass_description.colorAttachmentCount = 1;
-            subpass_description.pColorAttachments    = &lighting_attachment_reference;
-            render_pass_create_info.attachmentCount  = 1;
-            render_pass_create_info.pAttachments     = &lighting_attachment;
+            // Depth attachment
+            lighting_attachments[1] = {
+                // Format. We need high precision for position
+                .format = VK_FORMAT_D32_SFLOAT,
+                // No MSAA
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                // Operators
+                .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+                .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+                // Layout
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .finalLayout   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            };
+            VkAttachmentReference depth_reference = {
+                .attachment = 1,
+                .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            };
+
+            subpass_description.colorAttachmentCount    = 1;
+            subpass_description.pColorAttachments       = &lighting_reference;
+            subpass_description.pDepthStencilAttachment = &depth_reference;
+            render_pass_create_info.attachmentCount     = 2;
+            render_pass_create_info.pAttachments        = lighting_attachments;
             vk_check(vkCreateRenderPass(m_data->device, &render_pass_create_info, nullptr, &m_data->passes.lighting_pass),
                      "Couldn't create lighting render pass");
         }
@@ -2626,11 +2652,17 @@ namespace rg
                 // Geometric pass TODO
 
                 // Lighting pass
+
+                // Choose a color to clear the screen with
                 float        flash       = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
                 float        flash2      = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
-                VkClearValue clear_value = {
+                VkClearValue clear_color_value = {
                     .color = {.float32 = {1 - flash, flash2, flash, 1.0f}},
                 };
+                // Clear depth stencil
+                VkClearValue          clear_depth_value {.depthStencil = VkClearDepthStencilValue {1.0f, 0}};
+                VkClearValue        clear_values[2]         = {clear_color_value, clear_depth_value};
+
                 VkRenderPassBeginInfo render_pass_begin_info = {
                     .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                     .pNext = nullptr,
@@ -2641,8 +2673,8 @@ namespace rg
                     // Render area
                     .renderArea = {.offset = {0, 0}, .extent = swapchain.viewport_extent},
                     // Clear values
-                    .clearValueCount = 1,
-                    .pClearValues    = &clear_value,
+                    .clearValueCount = 2,
+                    .pClearValues    = clear_values,
                 };
                 vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 

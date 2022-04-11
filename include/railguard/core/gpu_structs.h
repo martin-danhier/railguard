@@ -1,13 +1,13 @@
 #pragma once
 
-#include <railguard/utils/geometry/mat4.h>
+#include <glm/mat4x4.hpp>
 
 namespace rg
 {
     struct GPUCameraData
     {
-        Mat4                  view            = {};
-        Mat4                  projection      = {};
-        [[maybe_unused]] Mat4 view_projection = {};
+        glm::mat4                  view            = {};
+        glm::mat4                  projection      = {};
+        [[maybe_unused]] glm::mat4 view_projection = {};
     };
 } // namespace rg

@@ -1,47 +1,51 @@
 #pragma once
 
-#include <railguard/utils/geometry/quat.h>
-#include <railguard/utils/geometry/vec3.h>
+// Import forward declaration of glm vec and quat
+#include <glm/gtc/quaternion.hpp>
 
 namespace rg
 {
-    class Mat4;
-
     class Transform
     {
       private:
-        Vec3 m_position;
-        Quat m_rotation;
-        Vec3 m_scale;
+        glm::vec3 m_position = {};
+        glm::quat m_rotation = {};
+        glm::vec3 m_scale    = {};
 
       public:
         Transform();
-        Transform(const Vec3& position, const Quat& rotation, const Vec3& scale);
+        Transform(const glm::vec3 &position, const glm::quat &rotation, const glm::vec3 &scale);
+        explicit Transform(const glm::quat &mRotation);
 
         // Getters
-        inline Vec3& position() {
+        inline glm::vec3 &position()
+        {
             return m_position;
         }
-        [[nodiscard]] inline const Vec3& position() const {
+        [[nodiscard]] inline const glm::vec3 &position() const
+        {
             return m_position;
         }
 
-        inline Quat& rotation() {
+        inline glm::quat &rotation()
+        {
             return m_rotation;
         }
-        [[nodiscard]] inline const Quat& rotation() const {
+        [[nodiscard]] inline const glm::quat &rotation() const
+        {
             return m_rotation;
         }
 
-        inline Vec3& scale() {
+        inline glm::vec3 &scale()
+        {
             return m_scale;
         }
-        [[nodiscard]] inline const Vec3& scale() const {
+        [[nodiscard]] inline const glm::vec3 &scale() const
+        {
             return m_scale;
         }
 
         // Methods
-        Mat4 view_matrix() const;
-
+        [[nodiscard]] glm::mat4 view_matrix() const;
     };
 } // namespace rg

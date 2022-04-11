@@ -50,11 +50,8 @@ set(railguard_lib_sources
     src/utils/hash_map.cpp
     src/utils/io.cpp
     src/utils/geometry/transform.cpp
-    src/utils/geometry/mat4.cpp
-    src/utils/geometry/quat.cpp
-    src/utils/vulkan/descriptor_set_helpers.cpp
-    include/railguard/utils/geometry/vec3.h
-    include/railguard/utils/array.h
+        src/utils/vulkan/descriptor_set_helpers.cpp
+        include/railguard/utils/array.h
     include/railguard/utils/map.h
     include/railguard/utils/vector.h
     include/railguard/utils/array_like.h
