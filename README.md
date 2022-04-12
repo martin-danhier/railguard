@@ -21,3 +21,12 @@ source <repo_dir>/gdb_formatter.py
 where you replace `<repo_dir>` by the directory where you cloned this repository.
 
 This will allow GDB to use custom pretty printers for core railguard types, such as `Vector`.
+
+## Build
+
+On Linux:
+
+- `cmake -Bbuild -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -GNinja`
+- `ninja -C build tests` to build tests. If `tests` is not specified, only the main library is built.
+- `cd ./build/tests`
+- Run one of the test executables, e.g `./core-cube`

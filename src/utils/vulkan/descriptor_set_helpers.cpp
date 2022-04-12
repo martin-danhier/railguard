@@ -232,7 +232,7 @@ namespace rg
         // Vectors to accumulate data for creation
         Vector<VkDescriptorSet *>            sets {2};
         Vector<VkDescriptorSetLayout>        layouts {2};
-        Vector<size_t>                       binding_counts {2};
+        Vector<size_t>                       binding_counts = Vector<size_t>(2);
         Vector<VkDescriptorSetLayoutBinding> current_bindings {3};
         DescriptorBalance                    current_balance = {};
         Vector<VkDescriptorBufferInfo>       buffer_infos {2};

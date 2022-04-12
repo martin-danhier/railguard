@@ -70,7 +70,7 @@ namespace rg
 
 #ifdef NO_INTERACTIVE
         // In tests, we want a timeout
-        uint64_t timeout = 20;
+        uint64_t timeout = 5000;
 
         // Run sleep in another thread, then send event
         std::thread(

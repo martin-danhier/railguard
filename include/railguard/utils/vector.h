@@ -4,8 +4,6 @@
 #include <railguard/utils/impl/vector_impl.h>
 #include <railguard/utils/optional.h>
 
-#include <stdexcept>
-
 namespace rg
 {
     template<typename T>
@@ -40,6 +38,15 @@ namespace rg
         {
             m_impl = std::move(other.m_impl);
             return *this;
+        }
+
+        // Initializer list
+        Vector(std::initializer_list<T> list) : m_impl(list.size(), sizeof(T))
+        {
+            for (auto &elem : list)
+            {
+                push_back(elem);
+            }
         }
 
         ~Vector()

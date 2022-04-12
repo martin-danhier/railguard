@@ -46,12 +46,13 @@ set(railguard_lib_sources
     src/core/engine.cpp
     src/core/window/window_sdl2.cpp
     src/core/renderer/renderer_vulkan.cpp
+    src/core/mesh.cpp
     src/utils/vector_impl.cpp
     src/utils/hash_map.cpp
     src/utils/io.cpp
     src/utils/geometry/transform.cpp
-        src/utils/vulkan/descriptor_set_helpers.cpp
-        include/railguard/utils/array.h
+    src/utils/vulkan/descriptor_set_helpers.cpp
+    include/railguard/utils/array.h
     include/railguard/utils/map.h
     include/railguard/utils/vector.h
     include/railguard/utils/array_like.h
@@ -130,6 +131,9 @@ endif()
 if (DEFINED ENV{CI})
     message(STATUS "Continuous integration detected, disabling interactive mode")
     set(interactive 0)
+    # Also disable sanitizers
+    set(enable_asan 0)
+    set(enable_ubsan 0)
 endif()
 
 # Enable or not interactivity

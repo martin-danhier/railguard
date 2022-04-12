@@ -20,9 +20,9 @@ namespace rg
       public:
         // Constructor
 
-        Array() = default;
+        constexpr Array() = default;
 
-        explicit Array(size_t count) : m_count(count), m_data(new T[count])
+        constexpr explicit Array(size_t count) : m_count(count), m_data(new T[count])
         {
             // Set all elements to zero
             for (size_t i = 0; i < m_count; ++i)
@@ -31,7 +31,7 @@ namespace rg
             }
         }
 
-        Array(const Array &other)
+        constexpr Array(const Array &other)
         {
             // Deep copy
             m_count = other.m_count;
@@ -42,7 +42,7 @@ namespace rg
             }
         }
 
-        Array(Array &&other) noexcept
+        constexpr Array(Array &&other) noexcept
         {
             // Move
             m_count       = other.m_count;

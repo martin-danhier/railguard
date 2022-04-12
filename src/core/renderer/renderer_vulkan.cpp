@@ -1,7 +1,7 @@
 #ifdef RENDERER_VULKAN
-#include "glm/ext/matrix_clip_space.hpp"
 #include "railguard/core/renderer.h"
 #include <railguard/core/gpu_structs.h>
+#include <railguard/core/mesh.h>
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
@@ -10,6 +10,7 @@
 #include <railguard/utils/storage.h>
 
 #include <cstring>
+#include <glm/ext/matrix_clip_space.hpp>
 #include <iostream>
 #include <string>
 #include <volk.h>
@@ -115,8 +116,22 @@ namespace rg
         Vector<ModelId> models_using_material = {};
     };
 
+    struct StoredMeshPart
+    {
+        MeshPart mesh_part;
+        size_t   vertex_offset;
+        size_t   index_offset;
+        bool     is_uploaded;
+
+        explicit StoredMeshPart(MeshPart &&part) : mesh_part(std::move(part)), vertex_offset(0), index_offset(0), is_uploaded(false)
+        {
+        }
+    };
+
     struct Model
     {
+        /** MeshPart used by this model */
+        MeshPartId mesh_part_id = NULL_ID;
         /** Material used by this model */
         MaterialId material_id = NULL_ID;
         /** Nodes using this model */
@@ -130,6 +145,15 @@ namespace rg
     };
 
     // Main types
+
+    struct VertexInputDescription
+    {
+        VkPipelineVertexInputStateCreateFlags    flags;
+        uint32_t                                 binding_count;
+        const VkVertexInputBindingDescription   *bindings;
+        uint32_t                                 attribute_count;
+        const VkVertexInputAttributeDescription *attributes;
+    };
 
     struct Camera
     {
@@ -232,7 +256,8 @@ namespace rg
         uint64_t built_effects_version = 0;
 
         // Render stages
-        Array<RenderStage> render_stages = {};
+        uint64_t           built_draw_cache_version = 0;
+        Array<RenderStage> render_stages            = {};
     };
 
     struct Renderer::Data
@@ -266,6 +291,11 @@ namespace rg
         Storage<Model>            models             = {};
         Storage<RenderNode>       render_nodes       = {};
         Storage<Camera>           cameras            = {};
+        Storage<StoredMeshPart>   mesh_parts         = {};
+
+        // Vertex and index buffer for all the meshes
+        AllocatedBuffer vertex_buffer = {};
+        AllocatedBuffer index_buffer  = {};
 
         // Descriptor layouts
         VkDescriptorSetLayout swapchain_set_layout = VK_NULL_HANDLE;
@@ -278,6 +308,10 @@ namespace rg
         // It is updated when buffer or texture combinations change
         // Frames that are out of date will be rebuilt
         uint64_t buffer_config_version = 0;
+        // Same for draw cache
+        uint64_t draw_cache_version = 0;
+        // Idem for meshes, but since the buffers are global to the renderer, a bool is enough
+        bool should_update_mesh_buffers = false;
 
         // ------------ Methods ------------
 
@@ -297,10 +331,10 @@ namespace rg
         void                             recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent);
         uint32_t                         get_next_swapchain_image(Swapchain &swapchain) const;
 
-        [[nodiscard]] VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const;
-        void                     build_out_of_date_effects(Swapchain &swapchain) const;
+        [[nodiscard]] VkPipeline build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect);
+        void                     build_out_of_date_effects(Swapchain &swapchain);
         void                     clear_pipelines(Swapchain &swapchain) const;
-        void                     recreate_pipelines(Swapchain &swapchain) const;
+        void                     recreate_pipelines(Swapchain &swapchain);
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
         void                     update_descriptor_sets(FrameData &frame);
 
@@ -312,6 +346,9 @@ namespace rg
         template<typename T>
         void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset = 0);
         [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
+
+        [[nodiscard]] static VertexInputDescription get_vertex_description();
+        void                                        update_mesh_buffers();
     };
 
     // endregion
@@ -1233,7 +1270,7 @@ namespace rg
 
     // region Effect functions
 
-    void Renderer::Data::build_out_of_date_effects(Swapchain &swapchain) const
+    void Renderer::Data::build_out_of_date_effects(Swapchain &swapchain)
     {
         // The version is incremented when new effects are created.
         if (swapchain.built_effects_version < effects_version)
@@ -1258,7 +1295,7 @@ namespace rg
         }
     }
 
-    VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect) const
+    VkPipeline Renderer::Data::build_shader_effect(const VkExtent2D &viewport_extent, const ShaderEffect &effect)
     {
         // This function will take the m_data contained in the effect and build a pipeline with it
         // First, create all the structs we will need in the pipeline create info
@@ -1296,16 +1333,18 @@ namespace rg
         // endregion
 
         // region Create vertex input state
+        const auto vertex_input_description = get_vertex_description();
 
         // Default for now because we don't have vertex input
         VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info = {
             .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext                           = nullptr,
-            .flags                           = 0,
-            .vertexBindingDescriptionCount   = 0,
-            .pVertexBindingDescriptions      = nullptr,
-            .vertexAttributeDescriptionCount = 0,
-            .pVertexAttributeDescriptions    = nullptr,
+            .flags                           = vertex_input_description.flags,
+            .vertexBindingDescriptionCount   = vertex_input_description.binding_count,
+            .pVertexBindingDescriptions      = vertex_input_description.bindings,
+            .vertexAttributeDescriptionCount = vertex_input_description.attribute_count,
+            .pVertexAttributeDescriptions    = vertex_input_description.attributes,
+
         };
 
         // endregion
@@ -1419,7 +1458,7 @@ namespace rg
 
         // region Create depth stencil state
 
-        // Todo paremetrize
+        // Todo parameterize
         VkPipelineDepthStencilStateCreateInfo depth_stencil_state_create_info = {
             .sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext                 = nullptr,
@@ -1476,6 +1515,9 @@ namespace rg
 
         // endregion
 
+        // This action has an implication on the draw cache, so we also need to mark it for update
+        draw_cache_version++;
+
         return pipeline;
     }
 
@@ -1494,7 +1536,7 @@ namespace rg
         swapchain.built_effects_version = 0;
     }
 
-    void Renderer::Data::recreate_pipelines(Swapchain &swapchain) const
+    void Renderer::Data::recreate_pipelines(Swapchain &swapchain)
     {
         // Destroy all pipelines
         clear_pipelines(swapchain);
@@ -1526,106 +1568,123 @@ namespace rg
 
     void Renderer::Data::update_stage_cache(Swapchain &swapchain)
     {
-        // For each stage
-        for (auto &stage : swapchain.render_stages)
+        if (draw_cache_version > swapchain.built_draw_cache_version)
         {
-            // Clear cache
-            stage.batches.clear();
-
-            // Find the model_ids using the materials using a template using an effect matching the stage
-            // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
-            // this will minimize the number of binds to do
-            Vector<ModelId> stage_models(10);
-
-            // For each effect
-            for (const auto &effect : shader_effects)
+            // For each stage
+            for (auto &stage : swapchain.render_stages)
             {
-                // If the effect supports that kind
-                if (effect.value().render_stage_kind == stage.kind)
+                // Clear cache
+                stage.batches.clear();
+
+                // Find the model_ids using the materials using a template using an effect matching the stage
+                // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
+                // this will minimize the number of binds to do
+                Vector<ModelId> stage_models(10);
+
+                // For each effect
+                for (const auto &effect : shader_effects)
                 {
-                    // Get the pipeline
-                    auto pipeline = swapchain.pipelines.get(effect.key());
-                    check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
-
-                    // For each material template
-                    for (const auto &mat_template : material_templates)
+                    // If the effect supports that kind
+                    if (effect.value().render_stage_kind == stage.kind)
                     {
-                        // If the template has that effect
-                        if (mat_template.value().shader_effects.includes(effect.key()))
-                        {
-                            // For each material
-                            // Note: if this becomes to computationally intensive, we could register materials in the template
-                            // like we do with the models
-                            for (const auto &material : materials)
-                            {
-                                // If the material has that template and there is at least one model to render
-                                if (material.value().template_id == mat_template.key()
-                                    && !material.value().models_using_material.is_empty())
-                                {
-                                    // Add a render batch
-                                    // Even though we could for now regroup them by shader effect instead of materials, this may
-                                    // change when we will add descriptor sets
-                                    // So we split batches by materials
-                                    // However, we won't bind a pipeline if it is the same as before, and batches are sorted by effect
-                                    stage.batches.push_back(RenderBatch {
-                                        stage_models.size(),
-                                        material.value().models_using_material.size(),
-                                        static_cast<VkPipeline>(pipeline.value()->as_ptr),
-                                        effect.value().pipeline_layout,
-                                    });
+                        // Get the pipeline
+                        auto pipeline = swapchain.pipelines.get(effect.key());
+                        check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
 
-                                    // Add the models using that material
-                                    stage_models.extend(material.value().models_using_material);
+                        // For each material template
+                        for (const auto &mat_template : material_templates)
+                        {
+                            // If the template has that effect
+                            if (mat_template.value().shader_effects.includes(effect.key()))
+                            {
+                                // For each material
+                                // Note: if this becomes to computationally intensive, we could register materials in the template
+                                // like we do with the models
+                                for (const auto &material : materials)
+                                {
+                                    // If the material has that template and there is at least one model to render
+                                    if (material.value().template_id == mat_template.key()
+                                        && !material.value().models_using_material.is_empty())
+                                    {
+                                        // Add a render batch
+                                        // Even though we could for now regroup them by shader effect instead of materials, this may
+                                        // change when we will add descriptor sets
+                                        // So we split batches by materials
+                                        // However, we won't bind a pipeline if it is the same as before, and batches are sorted by
+                                        // effect
+                                        stage.batches.push_back(RenderBatch {
+                                            stage_models.size(),
+                                            material.value().models_using_material.size(),
+                                            static_cast<VkPipeline>(pipeline.value()->as_ptr),
+                                            effect.value().pipeline_layout,
+                                        });
+
+                                        // Add the models using that material
+                                        stage_models.extend(material.value().models_using_material);
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                // If there is something to render
+                if (!stage_models.is_empty())
+                {
+                    // Prepare draw indirect commands
+                    const VkBufferUsageFlags indirect_buffer_usage =
+                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                    const VmaMemoryUsage indirect_buffer_memory_usage  = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                    const size_t         required_indirect_buffer_size = stage_models.size() * sizeof(VkDrawIndexedIndirectCommand);
+
+                    // If it does not exist, create it
+                    if (stage.indirect_buffer.buffer == VK_NULL_HANDLE)
+                    {
+                        stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
+                                                                        indirect_buffer_usage,
+                                                                        indirect_buffer_memory_usage);
+                    }
+                    // If it exists but isn't big enough, recreate it
+                    else if (stage.indirect_buffer.size < required_indirect_buffer_size)
+                    {
+                        allocator.destroy_buffer(stage.indirect_buffer);
+                        stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
+                                                                        indirect_buffer_usage,
+                                                                        indirect_buffer_memory_usage);
+                    }
+
+                    // At this point, we have an indirect buffer big enough to hold the commands we want to register
+
+                    // Register commands
+                    auto *indirect_commands = static_cast<VkDrawIndexedIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
+
+                    for (auto i = 0; i < stage_models.size(); ++i)
+                    {
+                        // Get model
+                        const auto model_id  = stage_models[i];
+                        const auto model_res = models.get(model_id);
+                        check(model_res.has_value(), "Tried to draw a model that doesn't exist.");
+                        const auto &model = model_res.value();
+
+                        // Get mesh
+                        const auto mesh_res = mesh_parts.get(model.mesh_part_id);
+                        check(mesh_res.has_value(), "Tried to draw a mesh part that doesn't exist.");
+                        const auto &part = mesh_res.value();
+                        check(part.is_uploaded, "Tried to draw a mesh part that hasn't been uploaded.");
+
+                        indirect_commands[i].vertexOffset  = static_cast<int32_t>(part.vertex_offset);
+                        indirect_commands[i].indexCount    = part.mesh_part.triangle_count() * 3;
+                        indirect_commands[i].firstIndex    = part.index_offset;
+                        indirect_commands[i].instanceCount = 1; // TODO when instances are added
+                        indirect_commands[i].firstInstance = 0;
+                    }
+
+                    allocator.unmap_buffer(stage.indirect_buffer);
+                }
             }
 
-            // If there is something to render
-            if (!stage_models.is_empty())
-            {
-                // Prepare draw indirect commands
-                const VkBufferUsageFlags indirect_buffer_usage =
-                    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-                const VmaMemoryUsage indirect_buffer_memory_usage  = VMA_MEMORY_USAGE_CPU_TO_GPU;
-                const size_t         required_indirect_buffer_size = stage_models.size() * sizeof(VkDrawIndirectCommand);
-
-                // If it does not exist, create it
-                if (stage.indirect_buffer.buffer == VK_NULL_HANDLE)
-                {
-                    stage.indirect_buffer =
-                        allocator.create_buffer(required_indirect_buffer_size, indirect_buffer_usage, indirect_buffer_memory_usage);
-                }
-                // If it exists but isn't big enough, recreate it
-                else if (stage.indirect_buffer.size < required_indirect_buffer_size)
-                {
-                    allocator.destroy_buffer(stage.indirect_buffer);
-                    stage.indirect_buffer =
-                        allocator.create_buffer(required_indirect_buffer_size, indirect_buffer_usage, indirect_buffer_memory_usage);
-                }
-
-                // At this point, we have an indirect buffer big enough to hold the commands we want to register
-
-                // Register commands
-                auto *indirect_commands = static_cast<VkDrawIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
-
-                for (auto i = 0; i < stage_models.size(); ++i)
-                {
-                    // Get model
-                    const auto model_id = stage_models[i];
-                    const auto model    = models.get(model_id);
-                    check(model.has_value(), "Tried to draw a model that doesn't exist.");
-
-                    indirect_commands[i].vertexCount   = 36; // TODO when mesh is added
-                    indirect_commands[i].firstVertex   = 0;
-                    indirect_commands[i].instanceCount = 1; // TODO when instances are added
-                    indirect_commands[i].firstInstance = 0;
-                }
-
-                allocator.unmap_buffer(stage.indirect_buffer);
-            }
+            // The cache is now up-to-date
+            swapchain.built_draw_cache_version = draw_cache_version;
         }
     }
     void Renderer::Data::draw_from_cache(const RenderStage &stage,
@@ -1633,7 +1692,7 @@ namespace rg
                                          FrameData         &current_frame,
                                          size_t             window_index) const
     {
-        constexpr uint32_t draw_stride         = sizeof(VkDrawIndirectCommand);
+        constexpr uint32_t draw_stride         = sizeof(VkDrawIndexedIndirectCommand);
         VkPipeline         bound_pipeline      = VK_NULL_HANDLE;
         VkDescriptorSet    bound_swapchain_set = VK_NULL_HANDLE;
 
@@ -1672,7 +1731,7 @@ namespace rg
             // Draw the batch
             const uint32_t &&draw_offset = draw_stride * batch.offset;
 
-            vkCmdDrawIndirect(cmd, stage.indirect_buffer.buffer, draw_offset, batch.count, draw_stride);
+            vkCmdDrawIndexedIndirect(cmd, stage.indirect_buffer.buffer, draw_offset, batch.count, draw_stride);
         }
     }
 
@@ -1713,6 +1772,147 @@ namespace rg
         // Copy it to buffer
         copy_buffer_to_gpu(camera_data, current_frame.camera_info_buffer, window_index);
     }
+    // endregion
+
+    // region Mesh part functions
+
+    VertexInputDescription Renderer::Data::get_vertex_description()
+    {
+        static constexpr VkVertexInputBindingDescription bindings[1] = {
+            VkVertexInputBindingDescription {
+                .binding   = 0,
+                .stride    = sizeof(Vertex),
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            },
+        };
+
+        static constexpr VkVertexInputAttributeDescription attributes[3] = {
+            // Vertex position attribute: location 0
+            VkVertexInputAttributeDescription {
+                .location = 0,
+                .binding  = 0,
+                .format   = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset   = offsetof(Vertex, position),
+            },
+            // Vertex normal attribute: location 1
+            VkVertexInputAttributeDescription {
+                .location = 1,
+                .binding  = 0,
+                .format   = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset   = offsetof(Vertex, normal),
+            },
+            // Vertex color coordinates attribute: location 2
+            VkVertexInputAttributeDescription {
+                .location = 2,
+                .binding  = 0,
+                .format   = VK_FORMAT_R32G32B32_SFLOAT,
+                .offset   = offsetof(Vertex, color),
+            },
+        };
+
+        static constexpr VertexInputDescription description {
+            .flags           = 0,
+            .binding_count   = 1,
+            .bindings        = bindings,
+            .attribute_count = 3,
+            .attributes      = attributes,
+        };
+
+        return description;
+    }
+
+    void Renderer::Data::update_mesh_buffers()
+    {
+        // For now, keep it simple: we create a buffer big enough for every mesh in the storage and send it.
+        // Later, we can try to introduce more local updates to the existing buffer (for example define it like a gpu vector) TODO
+
+        if (should_update_mesh_buffers)
+        {
+            constexpr size_t vertex_size   = MeshPart::vertex_byte_size();
+            constexpr size_t triangle_size = MeshPart::triangle_byte_size();
+            constexpr size_t index_size    = MeshPart::index_byte_size();
+
+            // Determine the size of all meshes
+            size_t total_vb_size = 0;
+            size_t total_ib_size = 0;
+
+            for (auto &res : mesh_parts)
+            {
+                const auto &part = res.value();
+
+                total_vb_size += vertex_size * part.mesh_part.vertex_count();
+                total_ib_size += triangle_size * part.mesh_part.triangle_count();
+            }
+
+            // Vertex buffer
+            if (!vertex_buffer.is_valid())
+            {
+                // Doesn't exist yet, create it
+                vertex_buffer = allocator.create_buffer(total_vb_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+            else if (vertex_buffer.size < total_vb_size)
+            {
+                // Exists but too small, reallocate it
+                allocator.destroy_buffer(vertex_buffer);
+                vertex_buffer = allocator.create_buffer(total_vb_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+
+            // Index buffer
+            if (!index_buffer.is_valid())
+            {
+                // Doesn't exist yet, create it
+                index_buffer = allocator.create_buffer(total_ib_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+            else if (index_buffer.size < total_ib_size)
+            {
+                // Exists but too small, reallocate it
+                allocator.destroy_buffer(index_buffer);
+                index_buffer = allocator.create_buffer(total_ib_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+
+            // Copy data to the buffers
+            size_t vb_offset = 0;
+            size_t ib_offset = 0;
+
+            // Map buffers
+            auto vb = static_cast<Vertex *>(allocator.map_buffer(vertex_buffer));
+            auto ib = static_cast<Triangle *>(allocator.map_buffer(index_buffer));
+
+            for (auto &res : mesh_parts)
+            {
+                auto &part = res.value();
+
+                // Copy vertex data
+                part.vertex_offset = vb_offset;
+                for (const auto &vertex: part.mesh_part.vertices())
+                {
+                    vb[vb_offset] = vertex;
+                    vb_offset++;
+                }
+
+                // Copy index data
+                part.index_offset = ib_offset;
+                for (const auto &triangle: part.mesh_part.triangles())
+                {
+                    ib[ib_offset] = triangle;
+                    ib_offset++;
+                }
+
+                part.is_uploaded = true;
+            }
+
+            // Unmap buffers
+            allocator.unmap_buffer(vertex_buffer);
+            allocator.unmap_buffer(index_buffer);
+
+            // Mesh buffers are now up-to-date
+            should_update_mesh_buffers = false;
+
+            // Though, we need to update draw cache because the buffers might have changed
+            draw_cache_version++;
+        }
+    }
+
     // endregion
 
     // ---==== Renderer ====---
@@ -2131,6 +2331,8 @@ namespace rg
         // endregion
     }
 
+    // region Base renderer functions
+
     Renderer::Renderer(Renderer &&other) noexcept : m_data(other.m_data)
     {
         // Just take the other's m_data and set the original to null, so it can't access it anymore
@@ -2145,6 +2347,17 @@ namespace rg
 
         // Wait for all frames to finish rendering
         m_data->wait_for_all_fences();
+
+        // Destroy vertex and index buffers
+        if (m_data->vertex_buffer.is_valid())
+        {
+            m_data->allocator.destroy_buffer(m_data->vertex_buffer);
+        }
+
+        if (m_data->index_buffer.is_valid())
+        {
+            m_data->allocator.destroy_buffer(m_data->index_buffer);
+        }
 
         // Destroy descriptor layouts
         vkDestroyDescriptorSetLayout(m_data->device, m_data->swapchain_set_layout, nullptr);
@@ -2171,6 +2384,7 @@ namespace rg
         // Clear storages
         clear_render_nodes();
         clear_models();
+        clear_mesh_parts();
         clear_materials();
         clear_material_templates();
         clear_shader_effects();
@@ -2325,6 +2539,8 @@ namespace rg
         // Enable it
         swapchain.enabled = true;
     }
+
+    // endregion
 
     // region Shader modules functions
 
@@ -2505,14 +2721,48 @@ namespace rg
 
     // endregion
 
+    // region Mesh parts
+
+    MeshPartId Renderer::save_mesh_part(MeshPart &&mesh_part)
+    {
+        // New buffers to store
+        m_data->should_update_mesh_buffers = true;
+
+        // Store it in the storage
+        return m_data->mesh_parts.push(StoredMeshPart {
+            std::move(mesh_part),
+        });
+    }
+
+    void Renderer::destroy_mesh_part(MeshPartId id)
+    {
+        // Maybe do not update buffers and let it there, and use a smarter way to update them
+        m_data->should_update_mesh_buffers = true;
+
+        // There is no special vulkan handle to destroy in the mesh part, so we just let the storage do its job
+        m_data->mesh_parts.remove(id);
+    }
+
+    void Renderer::clear_mesh_parts()
+    {
+        // Same here
+        m_data->should_update_mesh_buffers = true;
+
+        m_data->mesh_parts.clear();
+    }
+
+    // endregion
+
     // region Model functions
 
-    ModelId Renderer::create_model(MaterialId material)
+    ModelId Renderer::create_model(MeshPartId mesh_part, MaterialId material)
     {
+        check(mesh_part != NULL_ID, "A model must have a mesh part.");
         check(material != NULL_ID, "A model must have a material.");
 
         // Create model
         auto model_id = m_data->models.push({
+            mesh_part,
             material,
             Vector<RenderNodeId>(10),
         });
@@ -2624,6 +2874,9 @@ namespace rg
         // Update the descriptor sets if needed
         m_data->update_descriptor_sets(current_frame);
 
+        // Update meshes if needed
+        m_data->update_mesh_buffers();
+
         // For each enabled camera
         for (auto &cam_entry : m_data->cameras)
         {
@@ -2640,7 +2893,7 @@ namespace rg
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
 
-                // Update render stage cache
+                // Update render stage cache if needed
                 m_data->update_stage_cache(swapchain);
 
                 // Begin recording
@@ -2654,14 +2907,14 @@ namespace rg
                 // Lighting pass
 
                 // Choose a color to clear the screen with
-                float        flash       = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
-                float        flash2      = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
+                float        flash             = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
+                float        flash2            = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
                 VkClearValue clear_color_value = {
                     .color = {.float32 = {1 - flash, flash2, flash, 1.0f}},
                 };
                 // Clear depth stencil
-                VkClearValue          clear_depth_value {.depthStencil = VkClearDepthStencilValue {1.0f, 0}};
-                VkClearValue        clear_values[2]         = {clear_color_value, clear_depth_value};
+                VkClearValue clear_depth_value {.depthStencil = VkClearDepthStencilValue {1.0f, 0}};
+                VkClearValue clear_values[2] = {clear_color_value, clear_depth_value};
 
                 VkRenderPassBeginInfo render_pass_begin_info = {
                     .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2677,6 +2930,11 @@ namespace rg
                     .pClearValues    = clear_values,
                 };
                 vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+
+                // Bind vertex and index buffers
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(current_frame.command_buffer, 0, 1, &m_data->vertex_buffer.buffer, &offset);
+                vkCmdBindIndexBuffer(current_frame.command_buffer, m_data->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
                 // Draw
                 m_data->draw_from_cache(swapchain.render_stages[1],

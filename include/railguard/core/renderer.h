@@ -8,8 +8,9 @@ namespace rg
     class Window;
     template<typename T>
     class Array;
+    class MeshPart;
 
-    class Transform;
+    struct Transform;
 
     // ---==== Structs ====---
 
@@ -79,6 +80,7 @@ namespace rg
     using ShaderEffectId              = uint64_t;
     using MaterialTemplateId          = uint64_t;
     using MaterialId                  = uint64_t;
+    using MeshPartId                  = uint64_t;
     using ModelId                     = uint64_t;
     using RenderNodeId                = uint64_t;
     using CameraId                    = uint64_t;
@@ -153,9 +155,15 @@ namespace rg
         void       destroy_material(MaterialId id);
         void       clear_materials();
 
+        // Meshes
+
+        MeshPartId save_mesh_part(MeshPart &&mesh_part);
+        void       destroy_mesh_part(MeshPartId id);
+        void       clear_mesh_parts();
+
         // Models
 
-        ModelId create_model(MaterialId material);
+        ModelId create_model(MeshPartId mesh_part, MaterialId material);
         void    destroy_model(ModelId id);
         void    clear_models();
 
