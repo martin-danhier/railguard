@@ -32,7 +32,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 # Shaders location
 set(shaders_directory "${PROJECT_SOURCE_DIR}/tests/resources/shaders")
-set(spirv_directory "${CMAKE_BINARY_DIR}/tests/resources/shaders")
+set(spirv_directory   "${CMAKE_BINARY_DIR}/tests/resources/shaders")
 
 # Enable tests
 enable_testing()
@@ -69,6 +69,10 @@ set(railguard_lib_header_dir
 # Test resources
 set(test_resources
     tests/resources/test.txt
+    tests/resources/meshes/cube.obj
+    tests/resources/meshes/cube.mtl
+    tests/resources/meshes/monkey.obj
+    tests/resources/meshes/monkey.mtl
 )
 
 ##################################################################
@@ -106,26 +110,6 @@ if (DEFINED RENDERER_VULKAN)
     endif()
 endif()
 
-# On windows: enable debug symbols for clang
-if (WIN32)
-    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
-        add_compile_options(
-            -g
-        )
-    endif()
-endif()
-
-# Enable sanitizers if variable is 1
-if (${enable_asan} STREQUAL "1")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
-endif()
-
-if (${enable_ubsan} STREQUAL "1")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
-endif()
-
 # On a CI, override the value of interactive with 0
 # We know that we are on a CI if the CI environment variable is set
 if (DEFINED ENV{CI})
@@ -134,6 +118,29 @@ if (DEFINED ENV{CI})
     # Also disable sanitizers
     set(enable_asan 0)
     set(enable_ubsan 0)
+endif()
+
+set(is_msvc ${CMAKE_C_COMPILER_ID} STREQUAL "MSVC")
+set(is_mingw ${CMAKE_C_COMPILER_ID} STREQUAL "GNU" AND WIN32)
+
+# Enable sanitizers if variable is 1
+if (${enable_asan} STREQUAL "1" AND NOT ${is_mingw})
+    message(STATUS "Enabling address sanitizer")
+
+    # MSVC syntax is a bit different
+    if (${is_msvc})
+        set(CMAKE_C_FLAGS "${CMAKE_CXX_FLAGS} /fsanitize=address")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /fsanitize=address")
+    else()
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+    endif()
+endif()
+
+if (${enable_ubsan} STREQUAL "1" AND NOT ${is_msvc} AND NOT ${is_mingw})
+    message(STATUS "Enabling undefined behavior sanitizer")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=undefined")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined")
 endif()
 
 # Enable or not interactivity
@@ -169,7 +176,7 @@ endif()
 add_subdirectory(external)
 
 # Link common
-target_link_libraries(railguard_lib PUBLIC glm)
+target_link_libraries(railguard_lib PUBLIC glm tinyobjloader)
 
 # Link dependencies
 if (${interactive} STREQUAL "0")
@@ -217,7 +224,7 @@ macro(add_unit_test)
 
     # Compile test
     message(STATUS "Generating test \"${TEST_NAME}\"")
-    add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE} ${test_resources})
+    add_executable(${TEST_NAME} EXCLUDE_FROM_ALL tests/${TEST_FILE})
     target_sources(${TEST_NAME} PRIVATE tests/${TEST_FILE})
 
     # Set directory for executable
@@ -261,7 +268,11 @@ add_custom_target(
 )
 
 # Copy test resources
-file(COPY ${test_resources} DESTINATION ${CMAKE_BINARY_DIR}/tests/resources)
+foreach (test_resource ${test_resources})
+    # Get local path (remove prefix project source)
+    get_filename_component(file_path ${test_resource} PATH)
+    file(COPY ${test_resource} DESTINATION ${PROJECT_BINARY_DIR}/${file_path})
+endforeach()
 
 ##################################################################
 ###                     SHADER COMPILATION                     ###
@@ -279,14 +290,19 @@ if (DEFINED RENDERER_VULKAN)
         ${PROJECT_SOURCE_DIR}/glslangValidator/bin/ # For GitHub Actions
     )
 
+    # Error if not found
+    if (glsl_validator STREQUAL "")
+        message(FATAL_ERROR "Could not find glslangValidator")
+    else()
+        message(STATUS "Using glslangValidator: ${glsl_validator}")
+    endif()
+
     # Find shader files
     file(GLOB_RECURSE glsl_source_files
         "${shaders_directory}/*.frag"
         "${shaders_directory}/*.vert"
-        "${shaders_directory}/*.vert"
+        "${shaders_directory}/*.comp"
     )
-
-    target_sources(tests PRIVATE ${glsl_source_files})
 
     # Iterate each shader
     foreach(glsl ${glsl_source_files})
@@ -295,8 +311,8 @@ if (DEFINED RENDERER_VULKAN)
         # Get relative path of shader in shaders directory
         # Then place the spv file at the same location relatively
         get_filename_component(file_path ${glsl} PATH)
-        string(REGEX REPLACE "^${shaders_directory}" "" file_path ${file_path})
 
+        string(REGEX REPLACE "^${shaders_directory}/" "" file_path ${file_path})
         message(STATUS "Registering shader \"${file_path}/${file_name}\"")
 
         set(spirv "${spirv_directory}/${file_path}/${file_name}.spv")
@@ -304,6 +320,7 @@ if (DEFINED RENDERER_VULKAN)
         # Execute glslang command to compile that specific shader
         add_custom_command(
                 OUTPUT ${spirv}
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${spirv_directory}/${file_path}"
                 COMMAND ${glsl_validator} -V ${glsl} -o ${spirv}
                 DEPENDS ${glsl})
         list(APPEND spirv_binary_files ${spirv})

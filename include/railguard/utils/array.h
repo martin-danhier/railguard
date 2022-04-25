@@ -75,7 +75,18 @@ namespace rg
                 return *this;
 
             // Call destructor to clean this array before moving
-            this->~Array();
+            if (m_data != nullptr)
+            {
+                // Call destructor on all elements
+                for (size_t i = 0; i < m_count; ++i)
+                {
+                    m_data[i].~T();
+                }
+
+                delete[] m_data;
+                m_data  = nullptr;
+                m_count = 0;
+            }
 
             // Move
             m_count       = other.m_count;

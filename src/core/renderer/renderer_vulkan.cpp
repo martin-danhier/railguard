@@ -14,15 +14,23 @@
 #include <iostream>
 #include <string>
 #include <volk.h>
+
 // Needs to be after volk.h
 #include <railguard/utils/vulkan/descriptor_set_helpers.h>
 
 #include <vk_mem_alloc.h>
 
+// Check dependencies versions
+#ifndef VK_API_VERSION_1_3
+// We need Vulkan SDK 1.3 for vk_mem_alloc, because it uses VK_API_VERSION_MAJOR which was introduced in 1.3
+// We need this even if we use a lower version of Vulkan in the instance
+#error "Vulkan 1.3 is required"
+#endif
+
 // ---==== Defines ====---
 
 #define NB_OVERLAPPING_FRAMES   3
-#define VULKAN_API_VERSION      VK_API_VERSION_1_3
+#define VULKAN_API_VERSION      VK_API_VERSION_1_2
 #define WAIT_FOR_FENCES_TIMEOUT 1000000000
 #define SEMAPHORE_TIMEOUT       1000000000
 #define RENDER_STAGE_COUNT      2
@@ -68,11 +76,11 @@ namespace rg
 
         ~Allocator();
 
-        [[nodiscard]] AllocatedImage create_image(VkFormat              image_format,
-                                                  VkExtent3D            image_extent,
-                                                  VkImageUsageFlags     image_usage,
-                                                  VkImageAspectFlagBits image_aspect,
-                                                  VmaMemoryUsage        memory_usage) const;
+        [[nodiscard]] AllocatedImage create_image(VkFormat           image_format,
+                                                  VkExtent3D         image_extent,
+                                                  VkImageUsageFlags  image_usage,
+                                                  VkImageAspectFlags image_aspect,
+                                                  VmaMemoryUsage     memory_usage) const;
         void                         destroy_image(AllocatedImage &image) const;
 
         [[nodiscard]] AllocatedBuffer
@@ -161,23 +169,23 @@ namespace rg
         size_t     target_swapchain_index = 0;
         Transform  transform              = {};
         CameraType type                   = CameraType::PERSPECTIVE;
-        union
+        union CameraSpecs
         {
-            struct
+            struct Perspective
             {
                 float fov          = 0.0f;
                 float aspect_ratio = 0.0f;
                 float near_plane   = 0.0f;
                 float far_plane    = 0.0f;
-            } perspective;
-            struct
+            } as_perspective;
+            struct Orthographic
             {
                 float width      = 0.0f;
                 float height     = 0.0f;
                 float near_plane = 0.0f;
                 float far_plane  = 0.0f;
-            } orthographic;
-        };
+            } as_orthographic;
+        } specs;
     };
 
     struct RenderBatch
@@ -599,10 +607,17 @@ namespace rg
         vkGetPhysicalDeviceFeatures(device, &device_features);
 
         // Prefer something else than llvmpipe, which is testing use only
+#ifdef __cpp_lib_starts_ends_with
         if (!std::string(device_properties.deviceName).starts_with("llvmpipe"))
         {
             score += 15000;
         }
+#else
+        if (!std::string(device_properties.deviceName).find("llvmpipe"))
+        {
+            score += 15000;
+        }
+#endif
 
         // Prefer discrete gpu when available
         if (device_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
@@ -699,11 +714,11 @@ namespace rg
         return *this;
     }
 
-    AllocatedImage Allocator::create_image(VkFormat              image_format,
-                                           VkExtent3D            image_extent,
-                                           VkImageUsageFlags     image_usage,
-                                           VkImageAspectFlagBits image_aspect,
-                                           VmaMemoryUsage        memory_usage) const
+    AllocatedImage Allocator::create_image(VkFormat           image_format,
+                                           VkExtent3D         image_extent,
+                                           VkImageUsageFlags  image_usage,
+                                           VkImageAspectFlags image_aspect,
+                                           VmaMemoryUsage     memory_usage) const
     {
         // We use VMA for now. We can always switch to a custom allocator later if we want to.
         AllocatedImage image;
@@ -1205,7 +1220,8 @@ namespace rg
             auto &camera = res.value();
             if (camera.target_swapchain_index == swapchain.window_index && camera.type == CameraType::PERSPECTIVE)
             {
-                camera.perspective.aspect_ratio = static_cast<float>(new_extent.width) / static_cast<float>(new_extent.height);
+                camera.specs.as_perspective.aspect_ratio =
+                    static_cast<float>(new_extent.width) / static_cast<float>(new_extent.height);
             }
         }
     }
@@ -1286,7 +1302,8 @@ namespace rg
                 {
                     // Store the pipeline with the same id as the effect
                     // That way, we can easily find the pipeline of a given effect
-                    swapchain.pipelines.set(effect_id, {.as_ptr = build_shader_effect(swapchain.viewport_extent, effect.value())});
+                    swapchain.pipelines.set(effect_id,
+                                            HashMap::Value {.as_ptr = build_shader_effect(swapchain.viewport_extent, effect.value())});
                 }
             }
 
@@ -1377,7 +1394,7 @@ namespace rg
 
         VkRect2D scissor = {
             // Start in the corner
-            .offset = (VkOffset2D) {0, 0},
+            .offset = {0, 0},
             // Scale to the size of the window
             .extent = viewport_extent,
         };
@@ -1749,18 +1766,18 @@ namespace rg
         switch (camera.type)
         {
             case CameraType::PERSPECTIVE:
-                camera_data.projection = glm::perspective(camera.perspective.fov,
-                                                          camera.perspective.aspect_ratio,
-                                                          camera.perspective.near_plane,
-                                                          camera.perspective.far_plane);
+                camera_data.projection = glm::perspective(camera.specs.as_perspective.fov,
+                                                          camera.specs.as_perspective.aspect_ratio,
+                                                          camera.specs.as_perspective.near_plane,
+                                                          camera.specs.as_perspective.far_plane);
                 break;
             case CameraType::ORTHOGRAPHIC:
-                camera_data.projection = glm::ortho(-camera.orthographic.width / 2.0f,
-                                                    camera.orthographic.width / 2.0f,
-                                                    -camera.orthographic.height / 2.0f,
-                                                    camera.orthographic.height / 2.0f,
-                                                    camera.orthographic.near_plane,
-                                                    camera.orthographic.far_plane);
+                camera_data.projection = glm::ortho(-camera.specs.as_orthographic.width / 2.0f,
+                                                    camera.specs.as_orthographic.width / 2.0f,
+                                                    -camera.specs.as_orthographic.height / 2.0f,
+                                                    camera.specs.as_orthographic.height / 2.0f,
+                                                    camera.specs.as_orthographic.near_plane,
+                                                    camera.specs.as_orthographic.far_plane);
                 break;
         }
 
@@ -1786,27 +1803,27 @@ namespace rg
             },
         };
 
-        static constexpr VkVertexInputAttributeDescription attributes[3] = {
+        static const VkVertexInputAttributeDescription attributes[3] = {
             // Vertex position attribute: location 0
             VkVertexInputAttributeDescription {
                 .location = 0,
                 .binding  = 0,
                 .format   = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset   = offsetof(Vertex, position),
+                .offset   = static_cast<uint32_t>(offsetof(Vertex, position)),
             },
             // Vertex normal attribute: location 1
             VkVertexInputAttributeDescription {
                 .location = 1,
                 .binding  = 0,
                 .format   = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset   = offsetof(Vertex, normal),
+                .offset   = static_cast<uint32_t>(offsetof(Vertex, normal)),
             },
             // Vertex color coordinates attribute: location 2
             VkVertexInputAttributeDescription {
                 .location = 2,
                 .binding  = 0,
                 .format   = VK_FORMAT_R32G32B32_SFLOAT,
-                .offset   = offsetof(Vertex, color),
+                .offset   = static_cast<uint32_t>(offsetof(Vertex, tex_coord)),
             },
         };
 
@@ -1884,7 +1901,7 @@ namespace rg
 
                 // Copy vertex data
                 part.vertex_offset = vb_offset;
-                for (const auto &vertex: part.mesh_part.vertices())
+                for (const auto &vertex : part.mesh_part.vertices())
                 {
                     vb[vb_offset] = vertex;
                     vb_offset++;
@@ -1892,7 +1909,7 @@ namespace rg
 
                 // Copy index data
                 part.index_offset = ib_offset;
-                for (const auto &triangle: part.mesh_part.triangles())
+                for (const auto &triangle : part.mesh_part.triangles())
                 {
                     ib[ib_offset] = triangle;
                     ib_offset++;
@@ -2162,7 +2179,7 @@ namespace rg
             VkAttachmentDescription attachments[3];
 
             // Position color buffer
-            attachments[0] = (VkAttachmentDescription) {
+            attachments[0] = VkAttachmentDescription {
                 // Format. We need high precision for position
                 .format = VK_FORMAT_R16G16B16A16_SFLOAT,
                 // No MSAA
@@ -2176,31 +2193,31 @@ namespace rg
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .finalLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
-            attachment_references[0] = (VkAttachmentReference) {
+            attachment_references[0] = VkAttachmentReference {
                 .attachment = 0,
                 .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             };
             // Normal color buffer. Same format as position
             attachments[1]           = attachments[0];
-            attachment_references[1] = (VkAttachmentReference) {
+            attachment_references[1] = VkAttachmentReference {
                 .attachment = 1,
                 .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             };
             // Color + specular buffers
             attachments[2]           = attachments[0];
             attachments[2].format    = VK_FORMAT_R8G8B8A8_UINT;
-            attachment_references[2] = (VkAttachmentReference) {
+            attachment_references[2] = VkAttachmentReference {
                 .attachment = 2,
                 .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             };
             // Group attachments in an array
-            VkSubpassDescription subpass_description = {
+            auto subpass_description = VkSubpassDescription {
                 .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
                 // Color attachments
                 .colorAttachmentCount = 3,
                 .pColorAttachments    = attachment_references,
             };
-            VkRenderPassCreateInfo render_pass_create_info = {
+            auto render_pass_create_info = VkRenderPassCreateInfo {
                 .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
                 .pNext           = VK_NULL_HANDLE,
                 .attachmentCount = 3,
@@ -2213,7 +2230,7 @@ namespace rg
 
             // Create lighting render pass
             VkAttachmentDescription lighting_attachments[2];
-            lighting_attachments[0] = {
+            lighting_attachments[0] = VkAttachmentDescription {
                 // Format. We need high precision for position
                 .format = swapchain_image_format.format,
                 // No MSAA
@@ -2227,12 +2244,12 @@ namespace rg
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             };
-            VkAttachmentReference lighting_reference = {
+            auto lighting_reference = VkAttachmentReference {
                 .attachment = 0,
                 .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             };
             // Depth attachment
-            lighting_attachments[1] = {
+            lighting_attachments[1] = VkAttachmentDescription {
                 // Format. We need high precision for position
                 .format = VK_FORMAT_D32_SFLOAT,
                 // No MSAA
@@ -2246,7 +2263,7 @@ namespace rg
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
                 .finalLayout   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             };
-            VkAttachmentReference depth_reference = {
+            auto depth_reference = VkAttachmentReference {
                 .attachment = 1,
                 .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             };
@@ -2461,12 +2478,12 @@ namespace rg
 
             bool                       present_mode_found = false;
             constexpr VkPresentModeKHR desired_modes[]    = {
-                VK_PRESENT_MODE_MAILBOX_KHR,
-                VK_PRESENT_MODE_FIFO_KHR,
+                   VK_PRESENT_MODE_MAILBOX_KHR,
+                   VK_PRESENT_MODE_FIFO_KHR,
             };
-            for (const auto &available_mode : available_present_modes)
+            for (const auto &desired_mode : desired_modes)
             {
-                for (const auto &desired_mode : desired_modes)
+                for (const auto &available_mode : available_present_modes)
                 {
                     if (available_mode == desired_mode)
                     {
@@ -2998,12 +3015,15 @@ namespace rg
             .target_swapchain_index = window_index,
             .transform              = transform,
             .type                   = CameraType::ORTHOGRAPHIC,
-            .orthographic =
+            .specs =
                 {
-                    .width      = width,
-                    .height     = height,
-                    .near_plane = near,
-                    .far_plane  = far,
+                    .as_orthographic =
+                        {
+                            .width      = width,
+                            .height     = height,
+                            .near_plane = near,
+                            .far_plane  = far,
+                        },
                 },
         });
     }
@@ -3037,12 +3057,15 @@ namespace rg
             .target_swapchain_index = window_index,
             .transform              = transform,
             .type                   = CameraType::PERSPECTIVE,
-            .perspective =
+            .specs =
                 {
-                    .fov          = fov,
-                    .aspect_ratio = aspect,
-                    .near_plane   = near,
-                    .far_plane    = far,
+                    .as_perspective =
+                        {
+                            .fov          = fov,
+                            .aspect_ratio = aspect,
+                            .near_plane   = near,
+                            .far_plane    = far,
+                        },
                 },
         });
     }
