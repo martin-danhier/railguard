@@ -21,39 +21,45 @@ namespace rg
     {
         uint32_t dynamic_uniform_count;
         uint32_t dynamic_storage_count;
+        uint32_t storage_count;
 
         [[nodiscard]] inline uint32_t total() const
         {
-            return dynamic_uniform_count + dynamic_storage_count;
+            return dynamic_uniform_count + dynamic_storage_count + storage_count;
         }
 
         inline DescriptorBalance operator*(uint32_t v) const
         {
-            return {dynamic_uniform_count * v, dynamic_storage_count * v};
+            return {dynamic_uniform_count * v, dynamic_storage_count * v, storage_count * v};
         }
 
         inline DescriptorBalance &operator+=(const DescriptorBalance &other)
         {
             dynamic_uniform_count += other.dynamic_uniform_count;
             dynamic_storage_count += other.dynamic_storage_count;
+            storage_count += other.storage_count;
             return *this;
         }
 
         inline DescriptorBalance operator+(const DescriptorBalance &other) const
         {
-            return {dynamic_uniform_count + other.dynamic_uniform_count, dynamic_storage_count + other.dynamic_storage_count};
+            return {dynamic_uniform_count + other.dynamic_uniform_count,
+                    dynamic_storage_count + other.dynamic_storage_count,
+                    storage_count + other.storage_count};
         }
 
         inline DescriptorBalance &operator-=(const DescriptorBalance &other)
         {
             dynamic_uniform_count -= other.dynamic_uniform_count;
             dynamic_storage_count -= other.dynamic_storage_count;
+            storage_count -= other.storage_count;
             return *this;
         }
 
         inline bool operator>=(const DescriptorBalance &other) const
         {
-            return dynamic_uniform_count >= other.dynamic_uniform_count && dynamic_storage_count >= other.dynamic_storage_count;
+            return dynamic_uniform_count >= other.dynamic_uniform_count && dynamic_storage_count >= other.dynamic_storage_count
+                   && storage_count >= other.storage_count;
         }
     };
 
@@ -107,9 +113,10 @@ namespace rg
         ~DescriptorSetBuilder();
 
         DescriptorSetBuilder &
-            add_buffer(VkShaderStageFlags stages, VkDescriptorType type, VkBuffer buffer, size_t range, size_t offset=0);
-        DescriptorSetBuilder &add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset=0);
-        DescriptorSetBuilder &add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset=0);
+            add_buffer(VkShaderStageFlags stages, VkDescriptorType type, VkBuffer buffer, size_t range, size_t offset = 0);
+        DescriptorSetBuilder &add_dynamic_uniform_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset = 0);
+        DescriptorSetBuilder &add_dynamic_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset = 0);
+        DescriptorSetBuilder &add_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset = 0);
 
         DescriptorSetBuilder &save_descriptor_set(VkDescriptorSetLayout *layout, VkDescriptorSet *set);
 

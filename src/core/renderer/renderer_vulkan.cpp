@@ -144,6 +144,12 @@ namespace rg
         MaterialId material_id = NULL_ID;
         /** Nodes using this model */
         Vector<RenderNodeId> instances = {};
+        /**
+         * Root transform of the model.
+         * All instances object matrix will be first multiplied by the model matrix.
+         * It can for example be used to adjust the orientation of an imported model which may not use the same axis conventions.
+         * */
+        Transform transform = {};
     };
 
     struct RenderNode
@@ -223,6 +229,10 @@ namespace rg
         DynamicDescriptorPool descriptor_pool = {};
         // Used to determine whether the sets should be rebuilt
         uint64_t built_buffers_config_version = 0;
+
+        // Object data
+        AllocatedBuffer object_info_buffer = {};
+        VkDescriptorSet global_set         = VK_NULL_HANDLE;
 
         // Per-swapchain sets and buffers. Dynamic over swapchains
         AllocatedBuffer camera_info_buffer = {};
@@ -305,7 +315,11 @@ namespace rg
         AllocatedBuffer vertex_buffer = {};
         AllocatedBuffer index_buffer  = {};
 
+        // Storage buffer sizes
+        size_t object_data_capacity = 100;
+
         // Descriptor layouts
+        VkDescriptorSetLayout global_set_layout    = VK_NULL_HANDLE;
         VkDescriptorSetLayout swapchain_set_layout = VK_NULL_HANDLE;
 
         // Number incremented at each created shader effect
@@ -344,6 +358,7 @@ namespace rg
         void                     clear_pipelines(Swapchain &swapchain) const;
         void                     recreate_pipelines(Swapchain &swapchain);
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
+        void                     update_storage_buffers(FrameData &frame);
         void                     update_descriptor_sets(FrameData &frame);
 
         void update_stage_cache(Swapchain &swapchain);
@@ -1266,14 +1281,18 @@ namespace rg
             // Reset pool
             vk_check(frame.descriptor_pool.reset());
             frame.swapchain_set = VK_NULL_HANDLE;
-
-            // Create descriptor sets for all swapchains
-            uint32_t camera_buffer_size = pad_uniform_buffer_size(sizeof(GPUCameraData));
+            frame.global_set    = VK_NULL_HANDLE;
 
             vk_check(
                 DescriptorSetBuilder(device, frame.descriptor_pool)
+                    // Create descriptor set for all swapchains
                     .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT, frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
                     .save_descriptor_set(&swapchain_set_layout, &frame.swapchain_set)
+                    // Create descriptor set for global data (for example object matrices)
+                    .add_storage_buffer(VK_SHADER_STAGE_VERTEX_BIT,
+                                        frame.object_info_buffer.buffer,
+                                        sizeof(GPUObjectData) * object_data_capacity)
+                    .save_descriptor_set(&global_set_layout, &frame.global_set)
                     .build(),
                 "Couldn't build descriptor sets.");
 
@@ -1711,7 +1730,7 @@ namespace rg
     {
         constexpr uint32_t draw_stride         = sizeof(VkDrawIndexedIndirectCommand);
         VkPipeline         bound_pipeline      = VK_NULL_HANDLE;
-        VkDescriptorSet    bound_swapchain_set = VK_NULL_HANDLE;
+        bool global_sets_bound = false;
 
         if (stage.batches.is_empty())
         {
@@ -1730,19 +1749,20 @@ namespace rg
             }
 
             // The first iteration, bind global sets
-            if (bound_swapchain_set == VK_NULL_HANDLE)
+            if (!global_sets_bound)
             {
                 uint32_t              camera_buffer_offset = pad_uniform_buffer_size(sizeof(GPUCameraData)) * window_index;
                 const Array<uint32_t> offsets              = {camera_buffer_offset};
+                const Array<VkDescriptorSet> sets = {current_frame.swapchain_set, current_frame.global_set};
                 vkCmdBindDescriptorSets(cmd,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         batch.pipeline_layout,
                                         0,
-                                        1,
-                                        &current_frame.swapchain_set,
+                                        sets.size(),
+                                        sets.data(),
                                         offsets.size(),
                                         offsets.data());
-                bound_swapchain_set = current_frame.swapchain_set;
+                global_sets_bound = true;
             }
 
             // Draw the batch
@@ -1770,6 +1790,7 @@ namespace rg
                                                           camera.specs.as_perspective.aspect_ratio,
                                                           camera.specs.as_perspective.near_plane,
                                                           camera.specs.as_perspective.far_plane);
+                camera_data.projection[1][1] *= -1;
                 break;
             case CameraType::ORTHOGRAPHIC:
                 camera_data.projection = glm::ortho(-camera.specs.as_orthographic.width / 2.0f,
@@ -1928,6 +1949,64 @@ namespace rg
             // Though, we need to update draw cache because the buffers might have changed
             draw_cache_version++;
         }
+    }
+
+    // endregion
+
+    // region Storage buffers functions
+
+    void Renderer::Data::update_storage_buffers(FrameData &frame)
+    {
+        // region Object data
+
+        // We do it each frame because we want to be able to move objects around
+
+        // We need to store a GPUObjectData for each model
+        // TODO, later, it will be for each render node
+
+        // If the capacity is too small, we need to increase it
+        if (object_data_capacity < models.count())
+        {
+            // For now, we take a fixed margin above the required amount to avoid frequent reallocation's
+            // In the future, maybe a vector approach would be better (i.e. double the growth amount each time)
+            object_data_capacity = models.count() + 50;
+
+            // We also need to update the config version, so that the descriptor sets will be updated
+            buffer_config_version++;
+
+            const auto required_size = sizeof(GPUObjectData) * object_data_capacity;
+            if (!frame.object_info_buffer.is_valid())
+            {
+                // Doesn't exist yet, create it
+                frame.object_info_buffer =
+                    allocator.create_buffer(required_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+            else if (frame.object_info_buffer.size < required_size)
+            {
+                // Exists but too small, reallocate it
+                allocator.destroy_buffer(frame.object_info_buffer);
+                frame.object_info_buffer =
+                    allocator.create_buffer(required_size, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            }
+        }
+        // Copy model data to the GPU
+        if (frame.object_info_buffer.is_valid())
+        {
+            auto buf = static_cast<GPUObjectData *>(allocator.map_buffer(frame.object_info_buffer));
+
+            auto i = 0;
+            for (const auto &model : models)
+            {
+                buf[i] = GPUObjectData {
+                    .transform = model.value().transform.view_matrix(),
+                };
+                i++;
+            }
+
+            allocator.unmap_buffer(frame.object_info_buffer);
+        }
+
+        // endregion
     }
 
     // endregion
@@ -2334,11 +2413,17 @@ namespace rg
                                                                                * m_data->swapchain_capacity,
                                                                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                                                            VMA_MEMORY_USAGE_CPU_TO_GPU);
+                frame.object_info_buffer = m_data->allocator.create_buffer(sizeof(GPUObjectData) * m_data->object_data_capacity,
+                                                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                                           VMA_MEMORY_USAGE_CPU_TO_GPU);
 
                 // Create descriptor pool
-                frame.descriptor_pool =
-                    DynamicDescriptorPool(m_data->device,
-                                          DescriptorBalance {static_cast<uint32_t>(m_data->swapchain_capacity * 2), 0});
+                frame.descriptor_pool = DynamicDescriptorPool(m_data->device,
+                                                              DescriptorBalance {
+                                                                  4,
+                                                                  0,
+                                                                  2,
+                                                              });
 
                 // Init sets
                 m_data->buffer_config_version++;
@@ -2378,6 +2463,7 @@ namespace rg
 
         // Destroy descriptor layouts
         vkDestroyDescriptorSetLayout(m_data->device, m_data->swapchain_set_layout, nullptr);
+        vkDestroyDescriptorSetLayout(m_data->device, m_data->global_set_layout, nullptr);
 
         // Clear frames
         for (auto &frame : m_data->frames)
@@ -2386,6 +2472,7 @@ namespace rg
             frame.descriptor_pool.clear();
             // Destroy buffers
             m_data->allocator.destroy_buffer(frame.camera_info_buffer);
+            m_data->allocator.destroy_buffer(frame.object_info_buffer);
 
             // Destroy semaphores
             vkDestroySemaphore(m_data->device, frame.present_semaphore, nullptr);
@@ -2640,7 +2727,10 @@ namespace rg
         ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
 
         // Create pipeline layout
-        const Array<VkDescriptorSetLayout> descriptor_set_layouts = {m_data->swapchain_set_layout};
+        const Array<VkDescriptorSetLayout> descriptor_set_layouts = {
+            m_data->swapchain_set_layout,
+            m_data->global_set_layout,
+        };
 
         VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -2821,6 +2911,11 @@ namespace rg
         m_data->models.clear();
     }
 
+    Transform &Renderer::get_model_transform(ModelId id)
+    {
+        return m_data->models[id].transform;
+    }
+
     // endregion
 
     // region Render nodes functions
@@ -2887,6 +2982,9 @@ namespace rg
 
         // Wait for the fence
         m_data->wait_for_fence(current_frame.render_fence);
+
+        // Update SSBOs if needed
+        m_data->update_storage_buffers(current_frame);
 
         // Update the descriptor sets if needed
         m_data->update_descriptor_sets(current_frame);

@@ -165,6 +165,7 @@ namespace rg
 
         ModelId create_model(MeshPartId mesh_part, MaterialId material);
         void    destroy_model(ModelId id);
+        Transform &get_model_transform(ModelId id);
         void    clear_models();
 
         // Render node

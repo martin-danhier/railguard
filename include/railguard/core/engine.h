@@ -6,6 +6,8 @@ namespace rg
 {
     class Renderer;
     class Window;
+    template<typename EventData>
+    class EventSender;
 
     class Engine
     {
@@ -23,6 +25,7 @@ namespace rg
         // Getters
         [[nodiscard]] Renderer &renderer() const;
         [[nodiscard]] Window &window() const;
+        [[nodiscard]] EventSender<double> *on_update() const;
 
         void run_main_loop();
     };

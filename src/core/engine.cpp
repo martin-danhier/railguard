@@ -19,6 +19,7 @@ namespace rg
     {
         Window   window;
         Renderer renderer;
+        EventSender<double> update_event = {};
 
         explicit Data(Window &&window, Renderer &&renderer) : window(std::move(window)), renderer(std::move(renderer))
         {
@@ -107,6 +108,9 @@ namespace rg
 
             // Run rendering
             m_data->renderer.draw();
+
+            // Trigger update
+            m_data->update_event.send(delta_time);
         }
     }
 
@@ -124,6 +128,11 @@ namespace rg
             throw std::runtime_error("Engine not initialized.");
         }
         return m_data->window;
+    }
+
+    EventSender<double> *Engine::on_update() const
+    {
+        return &m_data->update_event;
     }
 
 } // namespace rg

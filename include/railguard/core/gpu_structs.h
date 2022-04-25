@@ -10,4 +10,9 @@ namespace rg
         glm::mat4 projection      = {};
         glm::mat4 view_projection = {};
     };
+
+    struct GPUObjectData
+    {
+        glm::mat4 transform = {};
+    };
 } // namespace rg

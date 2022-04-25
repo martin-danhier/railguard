@@ -37,7 +37,8 @@ TEST
     ASSERT_TRUE(monkey != rg::NULL_ID);
 
     // Create a model
-    auto model = renderer.create_model(monkey, material);
+    auto  model           = renderer.create_model(monkey, material);
+    auto &model_transform = renderer.get_model_transform(model);
 
     // Create a render node
     auto render_node = renderer.create_render_node(model);
@@ -50,6 +51,11 @@ TEST
     camera_transform.position.z = -10;
 
     glm::vec3 velocity(0, 0, 0);
+
+    engine.on_update()->subscribe(
+        [&model_transform](double delta_time) {
+            model_transform.rotation = rotate(model_transform.rotation, glm::radians(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        });
 
     engine.window().on_key_event()->subscribe(
         [&camera_transform, &velocity](const rg::KeyEvent &event)
@@ -69,12 +75,12 @@ TEST
                 else if (event.key == SDLK_q)
                 {
                     // Left
-                    camera_transform.position.x -= 1;
+                    camera_transform.position.x += 1;
                 }
                 else if (event.key == SDLK_d)
                 {
                     // Right
-                    camera_transform.position.x += 1;
+                    camera_transform.position.x -= 1;
                 }
                 else if (event.key == SDLK_a)
                 {
