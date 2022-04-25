@@ -65,12 +65,18 @@ namespace rg
     class Allocator
     {
       private:
-        VmaAllocator m_allocator = VK_NULL_HANDLE;
-        VkDevice     m_device    = VK_NULL_HANDLE;
+        VmaAllocator m_allocator             = VK_NULL_HANDLE;
+        VkDevice     m_device                = VK_NULL_HANDLE;
+        uint32_t     m_graphics_queue_family = 0;
+        uint32_t     m_transfer_queue_family = 0;
 
       public:
         Allocator() = default;
-        Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device);
+        Allocator(VkInstance       instance,
+                  VkDevice         device,
+                  VkPhysicalDevice physical_device,
+                  uint32_t         graphics_queue_family,
+                  uint32_t         transfer_queue_family);
         Allocator(Allocator &&other) noexcept;
         Allocator &operator=(Allocator &&other) noexcept;
 
@@ -83,11 +89,13 @@ namespace rg
                                                   VmaMemoryUsage     memory_usage) const;
         void                         destroy_image(AllocatedImage &image) const;
 
-        [[nodiscard]] AllocatedBuffer
-              create_buffer(size_t allocation_size, VkBufferUsageFlags buffer_usage, VmaMemoryUsage memory_usage) const;
-        void  destroy_buffer(AllocatedBuffer &buffer) const;
-        void *map_buffer(AllocatedBuffer &buffer) const;
-        void  unmap_buffer(AllocatedBuffer &buffer) const;
+        [[nodiscard]] AllocatedBuffer create_buffer(size_t             allocation_size,
+                                                    VkBufferUsageFlags buffer_usage,
+                                                    VmaMemoryUsage     memory_usage,
+                                                    bool               concurrent = false) const;
+        void                          destroy_buffer(AllocatedBuffer &buffer) const;
+        void                         *map_buffer(AllocatedBuffer &buffer) const;
+        void                          unmap_buffer(AllocatedBuffer &buffer) const;
     };
 
     // Material system
@@ -156,6 +164,25 @@ namespace rg
     {
         /** Model used by this node */
         ModelId model_id = NULL_ID;
+    };
+
+    // Transfer
+
+    struct TransferCommand
+    {
+        AllocatedBuffer staging_buffer = {};
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkFence         fence          = VK_NULL_HANDLE;
+
+        // Begin command buffer
+        void begin() const;
+        void end_and_submit(VkQueue queue);
+    };
+
+    struct TransferContext
+    {
+        VkCommandPool           command_pool = VK_NULL_HANDLE;
+        Vector<TransferCommand> commands {2};
     };
 
     // Main types
@@ -284,7 +311,6 @@ namespace rg
         VkDevice                   device            = VK_NULL_HANDLE;
         VkPhysicalDevice           physical_device   = VK_NULL_HANDLE;
         VkPhysicalDeviceProperties device_properties = {};
-        Queue                      graphics_queue    = {};
         Allocator                  allocator         = {};
         Passes                     passes            = {};
 #ifdef USE_VK_VALIDATION_LAYERS
@@ -297,9 +323,16 @@ namespace rg
         Array<Swapchain> swapchains         = {};
         size_t           swapchain_capacity = 0;
 
+        // Queues
+        Queue graphics_queue = {};
+        Queue transfer_queue = {};
+
         // Counter of frame since the start of the renderer
         uint64_t  current_frame_number          = 1;
         FrameData frames[NB_OVERLAPPING_FRAMES] = {};
+
+        // Transfer context
+        TransferContext transfer_context = {};
 
         // Storages for the material system
         Storage<ShaderModule>     shader_modules     = {};
@@ -372,6 +405,10 @@ namespace rg
 
         [[nodiscard]] static VertexInputDescription get_vertex_description();
         void                                        update_mesh_buffers();
+
+        // Transfer
+        TransferCommand create_transfer_command() const;
+        void            reset_transfer_context();
     };
 
     // endregion
@@ -663,7 +700,14 @@ namespace rg
 
     // region Allocator
 
-    Allocator::Allocator(VkInstance instance, VkDevice device, VkPhysicalDevice physical_device) : m_device(device)
+    Allocator::Allocator(VkInstance       instance,
+                         VkDevice         device,
+                         VkPhysicalDevice physical_device,
+                         uint32_t         graphics_queue_family,
+                         uint32_t         transfer_queue_family)
+        : m_device(device),
+          m_graphics_queue_family(graphics_queue_family),
+          m_transfer_queue_family(transfer_queue_family)
     {
         VmaVulkanFunctions vulkan_functions = {
             .vkGetPhysicalDeviceProperties           = vkGetPhysicalDeviceProperties,
@@ -708,7 +752,11 @@ namespace rg
         }
     }
 
-    Allocator::Allocator(Allocator &&other) noexcept : m_allocator(other.m_allocator), m_device(other.m_device)
+    Allocator::Allocator(Allocator &&other) noexcept
+        : m_allocator(other.m_allocator),
+          m_device(other.m_device),
+          m_graphics_queue_family(other.m_graphics_queue_family),
+          m_transfer_queue_family(other.m_transfer_queue_family)
     {
         other.m_allocator = VK_NULL_HANDLE;
     }
@@ -806,8 +854,10 @@ namespace rg
         image.image_view = VK_NULL_HANDLE;
     }
 
-    AllocatedBuffer
-        Allocator::create_buffer(size_t allocation_size, VkBufferUsageFlags buffer_usage, VmaMemoryUsage memory_usage) const
+    AllocatedBuffer Allocator::create_buffer(size_t             allocation_size,
+                                             VkBufferUsageFlags buffer_usage,
+                                             VmaMemoryUsage     memory_usage,
+                                             bool               concurrent) const
     {
         // We use VMA for now. We can always switch to a custom allocator later if we want to.
         AllocatedBuffer buffer = {
@@ -821,6 +871,18 @@ namespace rg
             .size  = allocation_size,
             .usage = buffer_usage,
         };
+
+        // Sharing mode
+        if (concurrent && m_graphics_queue_family != m_transfer_queue_family)
+        {
+            buffer_create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            Array<uint32_t> queue_indices  = {
+                 m_graphics_queue_family,
+                 m_transfer_queue_family,
+            };
+            buffer_create_info.pQueueFamilyIndices   = queue_indices.data();
+            buffer_create_info.queueFamilyIndexCount = static_cast<uint32_t>(queue_indices.size());
+        }
 
         // Create an allocation info
         VmaAllocationCreateInfo allocation_create_info = {
@@ -1728,9 +1790,9 @@ namespace rg
                                          FrameData         &current_frame,
                                          size_t             window_index) const
     {
-        constexpr uint32_t draw_stride         = sizeof(VkDrawIndexedIndirectCommand);
-        VkPipeline         bound_pipeline      = VK_NULL_HANDLE;
-        bool global_sets_bound = false;
+        constexpr uint32_t draw_stride       = sizeof(VkDrawIndexedIndirectCommand);
+        VkPipeline         bound_pipeline    = VK_NULL_HANDLE;
+        bool               global_sets_bound = false;
 
         if (stage.batches.is_empty())
         {
@@ -1751,9 +1813,9 @@ namespace rg
             // The first iteration, bind global sets
             if (!global_sets_bound)
             {
-                uint32_t              camera_buffer_offset = pad_uniform_buffer_size(sizeof(GPUCameraData)) * window_index;
-                const Array<uint32_t> offsets              = {camera_buffer_offset};
-                const Array<VkDescriptorSet> sets = {current_frame.swapchain_set, current_frame.global_set};
+                uint32_t                     camera_buffer_offset = pad_uniform_buffer_size(sizeof(GPUCameraData)) * window_index;
+                const Array<uint32_t>        offsets              = {camera_buffer_offset};
+                const Array<VkDescriptorSet> sets                 = {current_frame.swapchain_set, current_frame.global_set};
                 vkCmdBindDescriptorSets(cmd,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         batch.pipeline_layout,
@@ -1843,7 +1905,7 @@ namespace rg
             VkVertexInputAttributeDescription {
                 .location = 2,
                 .binding  = 0,
-                .format   = VK_FORMAT_R32G32B32_SFLOAT,
+                .format   = VK_FORMAT_R32G32_SFLOAT,
                 .offset   = static_cast<uint32_t>(offsetof(Vertex, tex_coord)),
             },
         };
@@ -1866,6 +1928,10 @@ namespace rg
 
         if (should_update_mesh_buffers)
         {
+            // Create transfer commands
+            TransferCommand vb_transfer_command = create_transfer_command();
+            TransferCommand ib_transfer_command = create_transfer_command();
+
             constexpr size_t vertex_size   = MeshPart::vertex_byte_size();
             constexpr size_t triangle_size = MeshPart::triangle_byte_size();
             constexpr size_t index_size    = MeshPart::index_byte_size();
@@ -1882,39 +1948,51 @@ namespace rg
                 total_ib_size += triangle_size * part.mesh_part.triangle_count();
             }
 
+            // region Create GPU-side buffers
+
             // Vertex buffer
+            auto vb_usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
             if (!vertex_buffer.is_valid())
             {
                 // Doesn't exist yet, create it
-                vertex_buffer = allocator.create_buffer(total_vb_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+                vertex_buffer = allocator.create_buffer(total_vb_size, vb_usage, VMA_MEMORY_USAGE_GPU_ONLY, true);
             }
             else if (vertex_buffer.size < total_vb_size)
             {
                 // Exists but too small, reallocate it
                 allocator.destroy_buffer(vertex_buffer);
-                vertex_buffer = allocator.create_buffer(total_vb_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+                vertex_buffer = allocator.create_buffer(total_vb_size, vb_usage, VMA_MEMORY_USAGE_GPU_ONLY, true);
             }
-
             // Index buffer
+            auto ib_usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
             if (!index_buffer.is_valid())
             {
                 // Doesn't exist yet, create it
-                index_buffer = allocator.create_buffer(total_ib_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+                index_buffer = allocator.create_buffer(total_ib_size, ib_usage, VMA_MEMORY_USAGE_GPU_ONLY, true);
             }
             else if (index_buffer.size < total_ib_size)
             {
                 // Exists but too small, reallocate it
                 allocator.destroy_buffer(index_buffer);
-                index_buffer = allocator.create_buffer(total_ib_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+                index_buffer = allocator.create_buffer(total_ib_size, ib_usage, VMA_MEMORY_USAGE_GPU_ONLY, true);
             }
+
+            // endregion
+
+            // region Setup transfer buffers
+
+            vb_transfer_command.staging_buffer =
+                allocator.create_buffer(total_vb_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
+            ib_transfer_command.staging_buffer =
+                allocator.create_buffer(total_ib_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_TO_GPU);
 
             // Copy data to the buffers
             size_t vb_offset = 0;
             size_t ib_offset = 0;
 
             // Map buffers
-            auto vb = static_cast<Vertex *>(allocator.map_buffer(vertex_buffer));
-            auto ib = static_cast<Triangle *>(allocator.map_buffer(index_buffer));
+            auto vb = static_cast<Vertex *>(allocator.map_buffer(vb_transfer_command.staging_buffer));
+            auto ib = static_cast<Triangle *>(allocator.map_buffer(ib_transfer_command.staging_buffer));
 
             for (auto &res : mesh_parts)
             {
@@ -1940,10 +2018,48 @@ namespace rg
             }
 
             // Unmap buffers
-            allocator.unmap_buffer(vertex_buffer);
-            allocator.unmap_buffer(index_buffer);
+            allocator.unmap_buffer(vb_transfer_command.staging_buffer);
+            allocator.unmap_buffer(ib_transfer_command.staging_buffer);
 
-            // Mesh buffers are now up-to-date
+            // endregion
+
+            // region Copy data to GPU
+
+            // Vertex buffer
+            vb_transfer_command.begin();
+            VkBufferCopy vb_copy {
+                .srcOffset = 0,
+                .dstOffset = 0,
+                .size      = total_vb_size,
+            };
+            vkCmdCopyBuffer(vb_transfer_command.command_buffer,
+                            vb_transfer_command.staging_buffer.buffer,
+                            vertex_buffer.buffer,
+                            1,
+                            &vb_copy);
+            vb_transfer_command.end_and_submit(transfer_queue.queue);
+
+            // Index buffer
+            ib_transfer_command.begin();
+            VkBufferCopy ib_copy {
+                .srcOffset = 0,
+                .dstOffset = 0,
+                .size      = total_ib_size,
+            };
+            vkCmdCopyBuffer(ib_transfer_command.command_buffer,
+                            ib_transfer_command.staging_buffer.buffer,
+                            index_buffer.buffer,
+                            1,
+                            &ib_copy);
+            ib_transfer_command.end_and_submit(transfer_queue.queue);
+
+            // endregion
+
+            // Store the commands
+            transfer_context.commands.push_back(vb_transfer_command);
+            transfer_context.commands.push_back(ib_transfer_command);
+
+            // Mesh buffers will now be up-to-date
             should_update_mesh_buffers = false;
 
             // Though, we need to update draw cache because the buffers might have changed
@@ -2007,6 +2123,89 @@ namespace rg
         }
 
         // endregion
+    }
+
+    // endregion
+
+    // region Transfer functions
+
+    void Renderer::Data::reset_transfer_context()
+    {
+        // Nothing to reset
+        if (transfer_context.commands.is_empty())
+        {
+            return;
+        }
+
+        // Wait for the transfer queue to finish
+        Array<VkFence> fences {transfer_context.commands.size()};
+        for (size_t i = 0; i < transfer_context.commands.size(); i++)
+        {
+            fences[i] = transfer_context.commands[i].fence;
+        }
+        vkWaitForFences(device, fences.size(), fences.data(), VK_TRUE, WAIT_FOR_FENCES_TIMEOUT);
+
+        for (auto &command : transfer_context.commands)
+        {
+            // Destroy the staging buffers
+            allocator.destroy_buffer(command.staging_buffer);
+            // Destroy fence
+            vkDestroyFence(device, command.fence, nullptr);
+        }
+
+        // Reset command pool
+        vkResetCommandPool(device, transfer_context.command_pool, 0);
+
+        // Clear the commands
+        transfer_context.commands.clear();
+    }
+
+    TransferCommand Renderer::Data::create_transfer_command() const
+    {
+        const VkCommandBufferAllocateInfo cmd_allocate_info = {
+            .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool        = transfer_context.command_pool,
+            .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        constexpr VkFenceCreateInfo fence_create_info = {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = 0,
+        };
+        TransferCommand command = {};
+        vk_check(vkAllocateCommandBuffers(device, &cmd_allocate_info, &command.command_buffer));
+        vk_check(vkCreateFence(device, &fence_create_info, nullptr, &command.fence));
+        return command;
+    }
+
+    void TransferCommand::begin() const
+    {
+        constexpr VkCommandBufferBeginInfo begin_info = {
+            .sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext            = nullptr,
+            .flags            = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = nullptr,
+        };
+        vkBeginCommandBuffer(command_buffer, &begin_info);
+    }
+
+    void TransferCommand::end_and_submit(VkQueue queue)
+    {
+        vk_check(vkEndCommandBuffer(command_buffer));
+
+        // Submit commands
+        const VkSubmitInfo submit_info = {
+            .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext                = nullptr,
+            .waitSemaphoreCount   = 0,
+            .pWaitSemaphores      = nullptr,
+            .pWaitDstStageMask    = nullptr,
+            .commandBufferCount   = 1,
+            .pCommandBuffers      = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores    = nullptr,
+        };
+        vk_check(vkQueueSubmit(queue, 1, &submit_info, fence));
     }
 
     // endregion
@@ -2157,24 +2356,52 @@ namespace rg
                                                      queue_family_properties.data());
 
             // Find the queue families that we need
-            bool found_graphics_queue = false;
+            bool found_graphics_queue         = false;
+            bool found_transfer_queue         = false;
+            bool found_optimal_transfer_queue = false;
 
             for (uint32_t i = 0; i < queue_family_properties_count; i++)
             {
                 const auto &family_properties = queue_family_properties[i];
 
                 // Save the graphics queue family_index
-                if (family_properties.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+                if (!found_graphics_queue && family_properties.queueFlags & VK_QUEUE_GRAPHICS_BIT)
                 {
                     m_data->graphics_queue.family_index = i;
                     found_graphics_queue                = true;
+                }
 
+                // Save the transfer queue family_index
+                if (family_properties.queueFlags & VK_QUEUE_TRANSFER_BIT)
+                {
+                    // If it's not the same as the graphics queue, we can use it
+                    if (!(family_properties.queueFlags & VK_QUEUE_GRAPHICS_BIT))
+                    {
+                        m_data->transfer_queue.family_index = i;
+                        found_transfer_queue                = true;
+                        found_optimal_transfer_queue        = true;
+                    }
+                    // It's the same as the graphics one, but we don't have one yet, so we'll take it
+                    // But we'll keep looking for another one
+                    else if (!found_transfer_queue)
+                    {
+                        m_data->transfer_queue.family_index = i;
+                        found_transfer_queue                = true;
+                    }
+                }
+
+                // Stop searching if we found everything we need
+                if (found_graphics_queue && found_optimal_transfer_queue)
+                {
                     break;
                 }
             }
 
             // If we didn't find a graphics queue, we can't continue
             check(found_graphics_queue, "Unable to find a graphics queue family_index.");
+
+            // If we didn't find a transfer queue, we can't continue
+            check(found_transfer_queue, "Unable to find a transfer queue family_index.");
 
             // Get GPU properties
             vkGetPhysicalDeviceProperties(m_data->physical_device, &m_data->device_properties);
@@ -2187,17 +2414,42 @@ namespace rg
         // region Device and queues creation
 
         {
+            Vector<VkDeviceQueueCreateInfo> queue_create_infos(2);
+
             // Define the parameters for the graphics queue
-            float                   graphics_queue_priority    = 1.0f;
-            VkDeviceQueueCreateInfo graphics_queue_create_info = {
+            Vector<float> priorities(2);
+            priorities.push_back(1.0f);
+
+            // Add the transfer queue if it is the same as the graphics one
+            if (m_data->graphics_queue.family_index == m_data->transfer_queue.family_index)
+            {
+                priorities.push_back(0.7f);
+            }
+            queue_create_infos.push_back(VkDeviceQueueCreateInfo {
                 // Struct infos
                 .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                 .pNext = nullptr,
                 // Queue info
                 .queueFamilyIndex = m_data->graphics_queue.family_index,
-                .queueCount       = 1,
-                .pQueuePriorities = &graphics_queue_priority,
-            };
+                .queueCount       = static_cast<uint32_t>(priorities.size()),
+                .pQueuePriorities = priorities.data(),
+            });
+
+            // Define the parameters for the transfer queue
+            float transfer_queue_priority = 1.0f;
+            if (m_data->graphics_queue.family_index != m_data->transfer_queue.family_index)
+            {
+                queue_create_infos.push_back(VkDeviceQueueCreateInfo {
+                    // Struct infos
+                    .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                    .pNext = nullptr,
+                    // Queue info
+                    .queueFamilyIndex = m_data->transfer_queue.family_index,
+                    .queueCount       = 1,
+                    .pQueuePriorities = &transfer_queue_priority,
+                });
+            }
+
             Array<const char *> required_device_extensions = {
                 VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             };
@@ -2208,8 +2460,8 @@ namespace rg
                 .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
                 .pNext = nullptr,
                 // Queue infos
-                .queueCreateInfoCount = 1,
-                .pQueueCreateInfos    = &graphics_queue_create_info,
+                .queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size()),
+                .pQueueCreateInfos    = queue_create_infos.data(),
                 // Layers
                 .enabledLayerCount   = 0,
                 .ppEnabledLayerNames = nullptr,
@@ -2226,13 +2478,27 @@ namespace rg
 
             // Get created queues
             vkGetDeviceQueue(m_data->device, m_data->graphics_queue.family_index, 0, &m_data->graphics_queue.queue);
+            // Get the transfer queue. If it is the same as the graphics one, it will be a second queue on the same family
+            if (m_data->graphics_queue.family_index == m_data->transfer_queue.family_index)
+            {
+                vkGetDeviceQueue(m_data->device, m_data->transfer_queue.family_index, 1, &m_data->transfer_queue.queue);
+            }
+            // Otherwise, it is in a different family, so the index is 0
+            else
+            {
+                vkGetDeviceQueue(m_data->device, m_data->transfer_queue.family_index, 0, &m_data->transfer_queue.queue);
+            }
         }
 
         // endregion
 
         // --=== Allocator ===--
 
-        m_data->allocator = std::move(Allocator(m_data->instance, m_data->device, m_data->physical_device));
+        m_data->allocator = std::move(Allocator(m_data->instance,
+                                                m_data->device,
+                                                m_data->physical_device,
+                                                m_data->graphics_queue.family_index,
+                                                m_data->transfer_queue.family_index));
 
         // --=== Swapchains ===--
 
@@ -2431,6 +2697,18 @@ namespace rg
             }
         }
         // endregion
+
+        // --=== Init transfer context ===--
+
+        // Create command pool for the do_transfer queue
+        VkCommandPoolCreateInfo command_pool_create_info = {
+            .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .pNext            = VK_NULL_HANDLE,
+            .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+            .queueFamilyIndex = m_data->transfer_queue.family_index,
+        };
+        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.command_pool),
+                 "Couldn't create do_transfer command pool");
     }
 
     // region Base renderer functions
@@ -2449,6 +2727,10 @@ namespace rg
 
         // Wait for all frames to finish rendering
         m_data->wait_for_all_fences();
+
+        // Destroy do_transfer context
+        m_data->reset_transfer_context();
+        vkDestroyCommandPool(m_data->device, m_data->transfer_context.command_pool, nullptr);
 
         // Destroy vertex and index buffers
         if (m_data->vertex_buffer.is_valid())
@@ -2982,6 +3264,7 @@ namespace rg
 
         // Wait for the fence
         m_data->wait_for_fence(current_frame.render_fence);
+        m_data->reset_transfer_context();
 
         // Update SSBOs if needed
         m_data->update_storage_buffers(current_frame);
