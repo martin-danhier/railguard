@@ -6,6 +6,7 @@
 
 TEST
 {
+    SDL_SetMainReady();
     SDL_Init(SDL_INIT_VIDEO);
     SDL_WindowFlags window_flags;
 
