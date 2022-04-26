@@ -12,6 +12,7 @@
 #include <cstring>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <iostream>
+#include <stb_image.h>
 #include <string>
 #include <volk.h>
 
@@ -86,7 +87,8 @@ namespace rg
                                                   VkExtent3D         image_extent,
                                                   VkImageUsageFlags  image_usage,
                                                   VkImageAspectFlags image_aspect,
-                                                  VmaMemoryUsage     memory_usage) const;
+                                                  VmaMemoryUsage     memory_usage,
+                                                  bool               concurrent = false) const;
         void                         destroy_image(AllocatedImage &image) const;
 
         [[nodiscard]] AllocatedBuffer create_buffer(size_t             allocation_size,
@@ -122,6 +124,12 @@ namespace rg
          * Given a render stage kind, the first corresponding effect will be the one used.
          * */
         Array<ShaderEffectId> shader_effects = {};
+    };
+
+    struct Texture
+    {
+        AllocatedImage image   = {};
+        VkSampler      sampler = VK_NULL_HANDLE;
     };
 
     struct Material
@@ -181,7 +189,8 @@ namespace rg
 
     struct TransferContext
     {
-        VkCommandPool           command_pool = VK_NULL_HANDLE;
+        VkCommandPool           transfer_pool = VK_NULL_HANDLE;
+        VkCommandPool           graphics_pool = VK_NULL_HANDLE;
         Vector<TransferCommand> commands {2};
     };
 
@@ -338,6 +347,7 @@ namespace rg
         Storage<ShaderModule>     shader_modules     = {};
         Storage<ShaderEffect>     shader_effects     = {};
         Storage<MaterialTemplate> material_templates = {};
+        Storage<Texture>          textures           = {};
         Storage<Material>         materials          = {};
         Storage<Model>            models             = {};
         Storage<RenderNode>       render_nodes       = {};
@@ -407,7 +417,7 @@ namespace rg
         void                                        update_mesh_buffers();
 
         // Transfer
-        TransferCommand create_transfer_command() const;
+        TransferCommand create_transfer_command(VkCommandPool pool) const;
         void            reset_transfer_context();
     };
 
@@ -781,7 +791,8 @@ namespace rg
                                            VkExtent3D         image_extent,
                                            VkImageUsageFlags  image_usage,
                                            VkImageAspectFlags image_aspect,
-                                           VmaMemoryUsage     memory_usage) const
+                                           VmaMemoryUsage     memory_usage,
+                                           bool               concurrent) const
     {
         // We use VMA for now. We can always switch to a custom allocator later if we want to.
         AllocatedImage image;
@@ -807,6 +818,19 @@ namespace rg
             .pQueueFamilyIndices   = nullptr,
             .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED,
         };
+
+        // Sharing mode
+        if (concurrent && m_graphics_queue_family != m_transfer_queue_family)
+        {
+            image_create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            Array<uint32_t> queue_indices = {
+                m_graphics_queue_family,
+                m_transfer_queue_family,
+            };
+            image_create_info.pQueueFamilyIndices   = queue_indices.data();
+            image_create_info.queueFamilyIndexCount = static_cast<uint32_t>(queue_indices.size());
+        }
+
         VmaAllocationCreateInfo alloc_create_info = {
             .usage          = memory_usage,
             .preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1929,8 +1953,8 @@ namespace rg
         if (should_update_mesh_buffers)
         {
             // Create transfer commands
-            TransferCommand vb_transfer_command = create_transfer_command();
-            TransferCommand ib_transfer_command = create_transfer_command();
+            TransferCommand vb_transfer_command = create_transfer_command(transfer_context.transfer_pool);
+            TransferCommand ib_transfer_command = create_transfer_command(transfer_context.transfer_pool);
 
             constexpr size_t vertex_size   = MeshPart::vertex_byte_size();
             constexpr size_t triangle_size = MeshPart::triangle_byte_size();
@@ -2148,23 +2172,27 @@ namespace rg
         for (auto &command : transfer_context.commands)
         {
             // Destroy the staging buffers
-            allocator.destroy_buffer(command.staging_buffer);
+            if (command.staging_buffer.is_valid())
+            {
+                allocator.destroy_buffer(command.staging_buffer);
+            }
             // Destroy fence
             vkDestroyFence(device, command.fence, nullptr);
         }
 
         // Reset command pool
-        vkResetCommandPool(device, transfer_context.command_pool, 0);
+        vkResetCommandPool(device, transfer_context.transfer_pool, 0);
+        vkResetCommandPool(device, transfer_context.graphics_pool, 0);
 
         // Clear the commands
         transfer_context.commands.clear();
     }
 
-    TransferCommand Renderer::Data::create_transfer_command() const
+    TransferCommand Renderer::Data::create_transfer_command(VkCommandPool pool) const
     {
         const VkCommandBufferAllocateInfo cmd_allocate_info = {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool        = transfer_context.command_pool,
+            .commandPool        = pool,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
@@ -2707,8 +2735,9 @@ namespace rg
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = m_data->transfer_queue.family_index,
         };
-        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.command_pool),
-                 "Couldn't create do_transfer command pool");
+        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.transfer_pool));
+        command_pool_create_info.queueFamilyIndex = m_data->graphics_queue.family_index;
+        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.graphics_pool));
     }
 
     // region Base renderer functions
@@ -2730,7 +2759,8 @@ namespace rg
 
         // Destroy do_transfer context
         m_data->reset_transfer_context();
-        vkDestroyCommandPool(m_data->device, m_data->transfer_context.command_pool, nullptr);
+        vkDestroyCommandPool(m_data->device, m_data->transfer_context.transfer_pool, nullptr);
+        vkDestroyCommandPool(m_data->device, m_data->transfer_context.graphics_pool, nullptr);
 
         // Destroy vertex and index buffers
         if (m_data->vertex_buffer.is_valid())
@@ -2771,6 +2801,7 @@ namespace rg
         clear_render_nodes();
         clear_models();
         clear_mesh_parts();
+        clear_textures();
         clear_materials();
         clear_material_templates();
         clear_shader_effects();
@@ -3246,6 +3277,238 @@ namespace rg
 
         m_data->render_nodes.clear();
     }
+    // endregion
+
+    // region Textures
+
+    TextureId Renderer::load_texture(const char *path, FilterMode filter_mode)
+    {
+        // Load image
+        int32_t  width, height, tex_channels;
+        stbi_uc *pixels = stbi_load(path, &width, &height, &tex_channels, STBI_rgb_alpha);
+        if (pixels == nullptr)
+        {
+            std::cerr << "Failed to load texture: " << path << std::endl;
+            return NULL_ID;
+        }
+
+        const VkDeviceSize image_size = width * height * 4;
+
+        // Create staging buffer
+        TransferCommand cmd = m_data->create_transfer_command(m_data->transfer_context.transfer_pool);
+        cmd.staging_buffer  = m_data->allocator.create_buffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+
+        // Copy pixels to staging buffer
+        void *data = m_data->allocator.map_buffer(cmd.staging_buffer);
+        memcpy(data, pixels, static_cast<size_t>(image_size));
+        m_data->allocator.unmap_buffer(cmd.staging_buffer);
+
+        // Free imported image
+        stbi_image_free(pixels);
+        pixels = nullptr;
+
+        constexpr VkFormat image_format = VK_FORMAT_R8G8B8A8_SRGB;
+        const VkExtent3D   extent       = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+
+        AllocatedImage image = m_data->allocator.create_image(image_format,
+                                                              extent,
+                                                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                                              VMA_MEMORY_USAGE_GPU_ONLY);
+
+        // Do the transfer and conversion
+        cmd.begin();
+
+        VkImageSubresourceRange subresource_range   = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier    barrier_to_transfer = {
+               .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+               .pNext = nullptr,
+               // Access mask
+               .srcAccessMask = 0,
+               .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+               // Image layout
+               .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
+               .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               .image            = image.image,
+               .subresourceRange = subresource_range,
+        };
+        vkCmdPipelineBarrier(cmd.command_buffer,
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr,
+                             1,
+                             &barrier_to_transfer);
+
+        // Copy image data from staging buffer to image
+        VkBufferImageCopy copy_region = {
+            .bufferOffset      = 0,
+            .bufferRowLength   = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource  = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageOffset       = {0, 0, 0},
+            .imageExtent       = extent,
+        };
+        vkCmdCopyBufferToImage(cmd.command_buffer,
+                               cmd.staging_buffer.buffer,
+                               image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1,
+                               &copy_region);
+
+        if (m_data->graphics_queue.family_index == m_data->transfer_queue.family_index)
+        {
+            // Change its format again
+            VkImageMemoryBarrier barrier_to_readable = barrier_to_transfer;
+            barrier_to_readable.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable.newLayout            = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier_to_readable.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable.dstAccessMask        = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable);
+
+            cmd.end_and_submit(m_data->transfer_queue.queue);
+        }
+        else
+        {
+            // Change its format again
+            VkImageMemoryBarrier barrier_to_readable = barrier_to_transfer;
+            barrier_to_readable.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable.newLayout            = VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+            barrier_to_readable.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable.dstAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier_to_readable.srcQueueFamilyIndex  = m_data->transfer_queue.family_index;
+            barrier_to_readable.dstQueueFamilyIndex  = m_data->graphics_queue.family_index;
+            vkCmdPipelineBarrier(cmd.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable);
+            cmd.end_and_submit(m_data->transfer_queue.queue);
+
+            // Continue from the graphics queue
+            TransferCommand cmd2 = m_data->create_transfer_command(m_data->transfer_context.graphics_pool);
+
+            cmd2.begin();
+
+            VkImageMemoryBarrier barrier_to_readable2 = barrier_to_transfer;
+            barrier_to_readable2.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable2.newLayout            = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier_to_readable2.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable2.dstAccessMask        = VK_ACCESS_SHADER_READ_BIT;
+            barrier_to_readable2.srcQueueFamilyIndex  = m_data->transfer_queue.family_index;
+            barrier_to_readable2.dstQueueFamilyIndex  = m_data->graphics_queue.family_index;
+            vkCmdPipelineBarrier(cmd2.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable2);
+
+            cmd2.end_and_submit(m_data->graphics_queue.queue);
+            m_data->transfer_context.commands.push_back(cmd2);
+        }
+
+        // Save command
+        m_data->transfer_context.commands.push_back(cmd);
+
+        // Get filter
+        VkFilter filter = VK_FILTER_LINEAR;
+        switch (filter_mode)
+        {
+            case FilterMode::NEAREST: filter = VK_FILTER_NEAREST; break;
+            default: break;
+        }
+
+        // Create sampler
+        VkSamplerCreateInfo sampler_info = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            // Filter
+            .magFilter  = filter,
+            .minFilter  = filter,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            // Address mode
+            .addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias              = 0.0f,
+            .anisotropyEnable        = VK_FALSE,
+            .maxAnisotropy           = 1,
+            .compareEnable           = VK_FALSE,
+            .compareOp               = VK_COMPARE_OP_ALWAYS,
+            .minLod                  = 0.0f,
+            .maxLod                  = 0.0f,
+            .borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+            .unnormalizedCoordinates = VK_FALSE,
+        };
+        VkSampler sampler = VK_NULL_HANDLE;
+        vk_check(vkCreateSampler(m_data->device, &sampler_info, nullptr, &sampler), "Failed to create sampler");
+
+        // Store the image
+        return m_data->textures.push(Texture {
+            .image   = image,
+            .sampler = sampler,
+        });
+    }
+
+    void Renderer::destroy_texture(TextureId id)
+    {
+        // Get the texture
+        auto texture = m_data->textures.get(id);
+        if (texture.has_value())
+        {
+            // Destroy the sampler
+            vkDestroySampler(m_data->device, texture->sampler, nullptr);
+
+            // Destroy the image
+            m_data->allocator.destroy_image(texture->image);
+
+            // Remove the texture
+            m_data->textures.remove(id);
+        }
+        // No value = already destroyed
+    }
+
+    void Renderer::clear_textures()
+    {
+        // Destroy all textures
+        for (auto &res : m_data->textures)
+        {
+            auto &texture = res.value();
+
+            // Destroy the sampler
+            vkDestroySampler(m_data->device, texture.sampler, nullptr);
+
+            // Destroy the image
+            m_data->allocator.destroy_image(texture.image);
+        }
+
+        // Clear the textures
+        m_data->textures.clear();
+    }
+
     // endregion
 
     // region Drawing

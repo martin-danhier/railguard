@@ -73,6 +73,9 @@ set(test_resources
     tests/resources/meshes/cube.mtl
     tests/resources/meshes/monkey.obj
     tests/resources/meshes/monkey.mtl
+    tests/resources/meshes/lost_empire.mtl
+    tests/resources/meshes/lost_empire.obj
+    tests/resources/textures/lost_empire-RGBA.png
 )
 
 ##################################################################
@@ -191,6 +194,7 @@ if (DEFINED RENDERER_VULKAN)
         Vulkan::Vulkan
         volk
         vma
+        stb_image
     )
 endif()
 

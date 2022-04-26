@@ -47,6 +47,12 @@ namespace rg
         ORTHOGRAPHIC = 1,
     };
 
+    enum class FilterMode
+    {
+        NEAREST = 0,
+        LINEAR  = 1,
+    };
+
     /** An association of the shader and its kind. */
     struct ShaderModule;
 
@@ -67,6 +73,9 @@ namespace rg
     /** Instance of a model */
     struct RenderNode;
 
+    /** A texture that can be used in a material. */
+    struct Texture;
+
     /**
      * A camera symbolizes the view of the world from which the scene is rendered.
      * It is the camera which defines the projection type (as_orthographic, as_perspective, etc.), and the viewport.
@@ -84,6 +93,7 @@ namespace rg
     using ModelId                     = uint64_t;
     using RenderNodeId                = uint64_t;
     using CameraId                    = uint64_t;
+    using TextureId                   = uint64_t;
 
     // ---==== Main classes ====---
 
@@ -173,6 +183,12 @@ namespace rg
         RenderNodeId create_render_node(ModelId model);
         void         destroy_render_node(RenderNodeId id);
         void         clear_render_nodes();
+
+        // Textures
+
+        TextureId load_texture(const char *path, FilterMode filter_mode);
+        void      destroy_texture(TextureId id);
+        void      clear_textures();
 
         // Cameras
         CameraId create_orthographic_camera(uint32_t window_index, float near, float far);
