@@ -19,6 +19,7 @@ namespace rg
     {
         Window   window;
         Renderer renderer;
+        EventSender<double> update_event = {};
 
         explicit Data(Window &&window, Renderer &&renderer) : window(std::move(window)), renderer(std::move(renderer))
         {
@@ -27,12 +28,10 @@ namespace rg
 
     // --==== Constructors ====--
 
-    Engine::Engine()
+    Engine::Engine(const char *title, uint32_t width, uint32_t height)
     {
-        const char *title = "My wonderful game";
-
         // Create window
-        Extent2D window_extent = {500, 500};
+        Extent2D window_extent = {width, height};
         Window   window(window_extent, title);
 
         // Create renderer
@@ -49,6 +48,22 @@ namespace rg
     Engine::~Engine()
     {
         delete m_data;
+    }
+
+    Engine::Engine(Engine &&other) noexcept: m_data(other.m_data)
+    {
+        other.m_data = nullptr;
+    }
+
+    Engine &Engine::operator=(Engine &&other) noexcept
+    {
+        if (this != &other)
+        {
+            delete m_data;
+            m_data = other.m_data;
+            other.m_data = nullptr;
+        }
+        return *this;
     }
 
     // --==== Methods ====--
@@ -93,6 +108,9 @@ namespace rg
 
             // Run rendering
             m_data->renderer.draw();
+
+            // Trigger update
+            m_data->update_event.send(delta_time);
         }
     }
 
@@ -111,4 +129,10 @@ namespace rg
         }
         return m_data->window;
     }
+
+    EventSender<double> *Engine::on_update() const
+    {
+        return &m_data->update_event;
+    }
+
 } // namespace rg

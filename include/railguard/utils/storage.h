@@ -48,7 +48,7 @@ namespace rg
 
         T &operator[](Id id)
         {
-            return get(id).expect("No element with id " + std::to_string(id) + ".");
+            return get(id).expect("No such id");
         }
 
         void remove(Id id)

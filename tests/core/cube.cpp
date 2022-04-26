@@ -13,6 +13,8 @@ TEST
 {
     rg::Engine engine;
 
+    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500));
+
     // Setup scene
 
     auto &renderer = engine.renderer();
@@ -30,58 +32,30 @@ TEST
     // Create a material
     auto material = renderer.create_material(material_template);
 
-    // Create a cube mesh part
-    auto cube = renderer.save_mesh_part(rg::MeshPart(
-        {
-            rg::Vertex {.position = {-1.0f, -1.0f, 1.0f}, .normal = {-1.0f, -1.0f, -1.0f}, .color = {1.0f, 0.0f, 0.0f}},
-            rg::Vertex {.position = {1.0f, -1.0f, 1.0f}, .normal = {1.0f, -1.0f, -1.0f}, .color = {1.0f, 0.0f, 0.0f}},
-            rg::Vertex {.position = {-1.0f, 1.0f, 1.0f}, .normal = {-1.0f, 1.0f, -1.0f}, .color = {1.0f, 0.0f, 0.0f}},
-            rg::Vertex {.position = {1.0f, 1.0f, 1.0f}, .normal = {1.0f, 1.0f, -1.0f}, .color = {1.0f, 0.0f, 0.0f}},
-            rg::Vertex {.position = {-1.0f, -1.0f, -1.0f}, .normal = {-1.0f, -1.0f, 1.0f}, .color = {1.0f, 1.0f, 0.0f}},
-            rg::Vertex {.position = {1.0f, -1.0f, -1.0f}, .normal = {1.0f, -1.0f, 1.0f}, .color = {1.0f, 1.0f, 0.0f}},
-            rg::Vertex {.position = {-1.0f, 1.0f, -1.0f}, .normal = {-1.0f, 1.0f, 1.0f}, .color = {1.0f, 1.0f, 0.0f}},
-            rg::Vertex {.position = {1.0f, 1.0f, -1.0f}, .normal = {1.0f, 1.0f, 1.0f}, .color = {1.0f, 1.0f, 0.0f}},
-        },
-        {
-            // Top
-            rg::Triangle {2, 6, 7},
-            rg::Triangle {2, 3, 7},
-
-            // Bottom
-            rg::Triangle {0, 4, 5},
-            rg::Triangle {0, 1, 5},
-
-            // Left
-            rg::Triangle {0, 2, 6},
-            rg::Triangle {0, 4, 6},
-
-            // Right
-            rg::Triangle {1, 3, 7},
-            rg::Triangle {1, 5, 7},
-
-            // Front
-            rg::Triangle {0, 2, 3},
-            rg::Triangle {0, 1, 3},
-
-            // Back
-            rg::Triangle {4, 6, 7},
-            rg::Triangle {4, 5, 7},
-        }));
+    // Create a monkey mesh part
+    auto monkey = rg::MeshPart::load_from_obj("resources/meshes/monkey.obj", engine.renderer());
+    ASSERT_TRUE(monkey != rg::NULL_ID);
 
     // Create a model
-    auto model = renderer.create_model(cube, material);
+    auto  model           = renderer.create_model(monkey, material);
+    auto &model_transform = renderer.get_model_transform(model);
 
     // Create a render node
     auto render_node = renderer.create_render_node(model);
 
     // Create a camera
-    auto  camera                  = renderer.create_perspective_camera(0, glm::radians(70.f), 0.01f, 200.0f);
-    auto &camera_transform        = renderer.get_camera_transform(camera);
+    auto  camera                = renderer.create_perspective_camera(0, glm::radians(70.f), 0.01f, 200.0f);
+    auto &camera_transform      = renderer.get_camera_transform(camera);
     camera_transform.position.x = 4;
     camera_transform.position.y = 3;
     camera_transform.position.z = -10;
 
     glm::vec3 velocity(0, 0, 0);
+
+    engine.on_update()->subscribe(
+        [&model_transform](double delta_time) {
+            model_transform.rotation = rotate(model_transform.rotation, glm::radians(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        });
 
     engine.window().on_key_event()->subscribe(
         [&camera_transform, &velocity](const rg::KeyEvent &event)
@@ -90,26 +64,32 @@ TEST
             {
                 if (event.key == SDLK_z)
                 {
+                    // Forward
                     camera_transform.position.z += 1;
                 }
                 else if (event.key == SDLK_s)
                 {
+                    // Backward
                     camera_transform.position.z -= 1;
                 }
                 else if (event.key == SDLK_q)
                 {
-                    camera_transform.position.x -= 1;
+                    // Left
+                    camera_transform.position.x += 1;
                 }
                 else if (event.key == SDLK_d)
                 {
-                    camera_transform.position.x += 1;
+                    // Right
+                    camera_transform.position.x -= 1;
                 }
                 else if (event.key == SDLK_a)
                 {
+                    // Up
                     camera_transform.position.y -= 1;
                 }
                 else if (event.key == SDLK_e)
                 {
+                    // Down
                     camera_transform.position.y += 1;
                 }
                 // W and C to rotate camera left and right

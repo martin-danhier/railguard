@@ -26,7 +26,7 @@ namespace rg
     struct DynamicDescriptorPool::Data
     {
         // Store pools in a vector, add them when more sets are allocated than the capacity of the pool
-        Vector<VkDescriptorPool> descriptor_pools{1};
+        Vector<VkDescriptorPool> descriptor_pools {1};
         // Device to be able to call functions
         VkDevice          device              = VK_NULL_HANDLE;
         DescriptorBalance remaining_capacity  = {};
@@ -43,7 +43,7 @@ namespace rg
         m_data->device              = device;
         m_data->single_pool_balance = balance;
         // We start with empty capacity
-        m_data->remaining_capacity  = {};
+        m_data->remaining_capacity = {};
     }
 
     DynamicDescriptorPool::~DynamicDescriptorPool()
@@ -87,6 +87,13 @@ namespace rg
             pool_sizes.push_back(VkDescriptorPoolSize {
                 .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
                 .descriptorCount = single_pool_balance.dynamic_storage_count,
+            });
+        }
+        if (single_pool_balance.storage_count != 0)
+        {
+            pool_sizes.push_back(VkDescriptorPoolSize {
+                .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = single_pool_balance.storage_count,
             });
         }
 
@@ -194,7 +201,7 @@ namespace rg
     {
         if (this != &other)
         {
-            m_data = other.m_data;
+            m_data       = other.m_data;
             other.m_data = nullptr;
         }
         return *this;
@@ -202,14 +209,15 @@ namespace rg
 
     void DynamicDescriptorPool::clear() const
     {
-        if (m_data != nullptr){
+        if (m_data != nullptr)
+        {
             // Destroy all pools
             for (auto &pool : m_data->descriptor_pools)
             {
                 vkDestroyDescriptorPool(m_data->device, pool, nullptr);
             }
 
-            m_data->remaining_capacity = {};
+            m_data->remaining_capacity  = {};
             m_data->single_pool_balance = {};
 
             m_data->descriptor_pools.clear();
@@ -244,7 +252,7 @@ namespace rg
 
     DescriptorSetBuilder::DescriptorSetBuilder(VkDevice device, DynamicDescriptorPool &pool) : m_data(new Data)
     {
-        m_data->pool = &pool;
+        m_data->pool   = &pool;
         m_data->device = device;
     }
 
@@ -263,7 +271,7 @@ namespace rg
         uint32_t binding_index = m_data->current_bindings.size();
 
         // Set binding
-        m_data->current_bindings.push_back(VkDescriptorSetLayoutBinding{
+        m_data->current_bindings.push_back(VkDescriptorSetLayoutBinding {
             .binding            = binding_index,
             .descriptorType     = type,
             .descriptorCount    = 1,
@@ -272,7 +280,7 @@ namespace rg
         });
 
         // Set buffer info
-        m_data->buffer_infos.push_back(VkDescriptorBufferInfo{
+        m_data->buffer_infos.push_back(VkDescriptorBufferInfo {
             .buffer = buffer,
             .offset = offset,
             .range  = range,
@@ -297,6 +305,7 @@ namespace rg
         {
             case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC: m_data->current_balance.dynamic_uniform_count += 1; break;
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC: m_data->current_balance.dynamic_storage_count += 1; break;
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: m_data->current_balance.storage_count += 1; break;
             default: throw std::runtime_error("DescriptorSetBuilder::add_buffer: unsupported descriptor type");
         }
 
@@ -315,9 +324,14 @@ namespace rg
         return add_buffer(stages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, buffer, range, offset);
     }
 
+    DescriptorSetBuilder &
+        DescriptorSetBuilder::add_storage_buffer(VkShaderStageFlags stages, VkBuffer buffer, size_t range, size_t offset)
+    {
+        return add_buffer(stages, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, buffer, range, offset);
+    }
+
     DescriptorSetBuilder &DescriptorSetBuilder::save_descriptor_set(VkDescriptorSetLayout *layout, VkDescriptorSet *set)
     {
-
         // Create layout
         // If layout is not null, it is assumed to be already valid from before
         // If it is not valid, too bad for you

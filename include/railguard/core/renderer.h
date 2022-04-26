@@ -69,7 +69,7 @@ namespace rg
 
     /**
      * A camera symbolizes the view of the world from which the scene is rendered.
-     * It is the camera which defines the projection type (orthographic, perspective, etc.), and the viewport.
+     * It is the camera which defines the projection type (as_orthographic, as_perspective, etc.), and the viewport.
      * A camera can either render to a window or to a texture.
      * */
     struct Camera;
@@ -165,6 +165,7 @@ namespace rg
 
         ModelId create_model(MeshPartId mesh_part, MaterialId material);
         void    destroy_model(ModelId id);
+        Transform &get_model_transform(ModelId id);
         void    clear_models();
 
         // Render node
