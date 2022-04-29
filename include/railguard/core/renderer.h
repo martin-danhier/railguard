@@ -34,12 +34,21 @@ namespace rg
         LIGHTING = 2,
     };
 
-    enum class ShaderStage
+    enum class ShaderStage : uint32_t
     {
         INVALID  = 0,
         VERTEX   = 1,
         FRAGMENT = 2,
     };
+    // Operators to make it usable as flags to define several stages at once
+    constexpr ShaderStage operator|(ShaderStage a, ShaderStage b)
+    {
+        return static_cast<ShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    }
+    constexpr bool operator&(ShaderStage a, ShaderStage b)
+    {
+        return static_cast<bool>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+    }
 
     enum class CameraType
     {
@@ -57,7 +66,7 @@ namespace rg
     struct ShaderModule;
 
     /**
-     * A shader effect defines the whole shader pipeline (what shader_modules are used, in what order, for what render stage...)
+     * A shader effect defines the whole shader pipeline (what shader_modules are used, in what order, for what render stages...)
      */
     struct ShaderEffect;
 
@@ -75,6 +84,13 @@ namespace rg
 
     /** A texture that can be used in a material. */
     struct Texture;
+
+    /** Description of the characteristics of a texture */
+    struct TextureLayout
+    {
+        /** Shader stages in which the texture will be accessible. Defaults to FRAGMENT. */
+        ShaderStage stages = ShaderStage::FRAGMENT;
+    };
 
     /**
      * A camera symbolizes the view of the world from which the scene is rendered.
@@ -149,7 +165,16 @@ namespace rg
 
         // Shader effects
 
-        ShaderEffectId create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind);
+        /**
+         * Creates a new shader effect, which defines the configuration of the rendering pipeline.
+         * @param stages Shaders to be executed, in order.
+         * @param render_stage_kind Render stages concerned by this pipeline.
+         * @param textures Layouts of the textures of this shader configuration, in order.
+         * @return the id of the new shader effect, or NULL_ID if it failed.
+         */
+        ShaderEffectId create_shader_effect(const Array<ShaderModuleId> &stages,
+                                            RenderStageKind              render_stage_kind,
+                                            const Array<TextureLayout>  &textures);
         void           destroy_shader_effect(ShaderEffectId id);
         void           clear_shader_effects();
 
@@ -161,7 +186,15 @@ namespace rg
 
         // Materials
 
-        MaterialId create_material(MaterialTemplateId material_template);
+        /**
+         * Creates a new material.
+         * @param material_template template containing default parameters and common logic between similar materials.
+         * @param textures For each effect (in the same order as the ones defined in the template), the textures that are used. Must
+         * match the shader effect layout.
+         * @return the id of the new material.
+         */
+        MaterialId create_material(MaterialTemplateId material_template, const Array<Array<TextureId>> &textures);
+        MaterialId create_material(MaterialTemplateId material_template, Array<Array<TextureId>> &&textures);
         void       destroy_material(MaterialId id);
         void       clear_materials();
 
@@ -173,10 +206,10 @@ namespace rg
 
         // Models
 
-        ModelId create_model(MeshPartId mesh_part, MaterialId material);
-        void    destroy_model(ModelId id);
+        ModelId    create_model(MeshPartId mesh_part, MaterialId material);
+        void       destroy_model(ModelId id);
         Transform &get_model_transform(ModelId id);
-        void    clear_models();
+        void       clear_models();
 
         // Render node
 

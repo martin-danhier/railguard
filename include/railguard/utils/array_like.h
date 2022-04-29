@@ -14,12 +14,16 @@ namespace rg
     class ArrayLike
     {
       public:
-        virtual ~ArrayLike()                                        = default;
         virtual T                   *data()                         = 0;
         virtual const T             *data() const                   = 0;
         [[nodiscard]] virtual size_t size() const                   = 0;
         virtual T                   &operator[](size_t index)       = 0;
         virtual const T             &operator[](size_t index) const = 0;
+
+        [[nodiscard]] inline bool is_empty() const
+        {
+            return size() == 0;
+        }
 
         // Those methods can be used to create an iterator
 

@@ -24,19 +24,20 @@ TEST
     auto fragment_shader = renderer.load_shader_module("resources/shaders/textured/textured.frag.spv", rg::ShaderStage::FRAGMENT);
 
     // Create a shader effect
-    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::LIGHTING);
+    auto hello_effect =
+        renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::LIGHTING, {{rg::ShaderStage::FRAGMENT}});
 
     // Create a material template
     auto material_template = renderer.create_material_template({hello_effect});
 
     // Load texture
-    auto texture = renderer.load_texture("resources/textures/lost_empire-RGBA.png", rg::FilterMode::NEAREST);
+    auto texture = renderer.load_texture("resources/textures/lost_empire-RGB.png", rg::FilterMode::NEAREST);
 
     // Create a material
-    auto material = renderer.create_material(material_template);
+    auto material = renderer.create_material(material_template, {{texture}});
 
     // Create a scene mesh part
-    auto scene = rg::MeshPart::load_from_obj("resources/meshes/lost_empire.obj", engine.renderer());
+    auto scene = rg::MeshPart::load_from_obj("resources/meshes/lost_empire.obj", engine.renderer(), true);
     ASSERT_TRUE(scene != rg::NULL_ID);
 
     // Create a model

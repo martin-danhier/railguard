@@ -19,11 +19,12 @@ layout(set = 1, binding = 0) readonly buffer ObjectBuffer {
     ObjectData objects[];
 } objectBuffer;
 
-layout (location = 0) out vec3 outColor;
+// Output
+layout (location = 0) out vec2 out_tex_coords;
 
 void main() {
     //output the position of each vertex
     ObjectData current_object = objectBuffer.objects[0];
     gl_Position = camera.view_projection * current_object.transform * vec4(position, 1.0f);
-    outColor = normal;
+    out_tex_coords = tex_coords;
 }

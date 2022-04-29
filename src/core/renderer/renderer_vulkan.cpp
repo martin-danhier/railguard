@@ -115,13 +115,19 @@ namespace rg
         /** Array of shader module ID. Shader stages of the pipeline, in order. */
         Array<ShaderModuleId> shader_stages   = {};
         VkPipelineLayout      pipeline_layout = VK_NULL_HANDLE;
+        /** Layout of the textures set.
+         *
+         * Each shader configuration is designed for a specific arrangement of textures (normal map, etc).
+         * All materials that use this shader thus need to respect the same layout.
+         */
+        VkDescriptorSetLayout textures_set_layout = VK_NULL_HANDLE;
     };
 
     struct MaterialTemplate
     {
         /**
          * Array of shader effect IDs. Available effects for this template.
-         * Given a render stage kind, the first corresponding effect will be the one used.
+         * Given a render stages kind, the first corresponding effect will be the one used.
          * */
         Array<ShaderEffectId> shader_effects = {};
     };
@@ -137,7 +143,9 @@ namespace rg
         /** Template this material is based on. Defines the available shader effects for this material. */
         MaterialTemplateId template_id = NULL_ID;
         /** Models using this material */
-        Vector<ModelId> models_using_material = {};
+        Vector<ModelId>         models_using_material = {};
+        Array<Array<TextureId>> textures              = {};
+        Array<VkDescriptorSet>  textures_sets         = {};
     };
 
     struct StoredMeshPart
@@ -236,6 +244,7 @@ namespace rg
         size_t           count           = 0;
         VkPipeline       pipeline        = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+        VkDescriptorSet  textures_set    = VK_NULL_HANDLE;
     };
 
     struct RenderStage
@@ -361,6 +370,9 @@ namespace rg
         // Storage buffer sizes
         size_t object_data_capacity = 100;
 
+        // Descriptor pool for sets that don't need to change per frame
+        DynamicDescriptorPool static_descriptor_pool = {};
+
         // Descriptor layouts
         VkDescriptorSetLayout global_set_layout    = VK_NULL_HANDLE;
         VkDescriptorSetLayout swapchain_set_layout = VK_NULL_HANDLE;
@@ -402,7 +414,7 @@ namespace rg
         void                     recreate_pipelines(Swapchain &swapchain);
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
         void                     update_storage_buffers(FrameData &frame);
-        void                     update_descriptor_sets(FrameData &frame);
+        void                     update_descriptor_sets(FrameData &frame) const;
 
         void update_stage_cache(Swapchain &swapchain);
 
@@ -483,6 +495,32 @@ namespace rg
             // TODO maybe recoverable ?
             exit(1);
         }
+    }
+
+    // endregion
+
+    // region Conversion to Vk types
+
+    VkShaderStageFlags convert_shader_stages(ShaderStage stage, bool forceOne = false)
+    {
+        VkShaderStageFlags result = 0;
+
+        if (forceOne)
+        {
+            check(stage == ShaderStage::VERTEX || stage == ShaderStage::FRAGMENT, "Expected a single shader stages, got multiple.");
+        }
+
+        // Stage can be a mask
+        if (stage & ShaderStage::VERTEX)
+        {
+            result |= VK_SHADER_STAGE_VERTEX_BIT;
+        }
+        if (stage & ShaderStage::FRAGMENT)
+        {
+            result |= VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+
+        return result;
     }
 
     // endregion
@@ -1358,7 +1396,7 @@ namespace rg
 
     // region Descriptor sets functions
 
-    void Renderer::Data::update_descriptor_sets(FrameData &frame)
+    void Renderer::Data::update_descriptor_sets(FrameData &frame) const
     {
         // If the built version is out of date, rebuild
         // Otherwise, we can just reuse the descriptor sets from the last frame
@@ -1369,18 +1407,15 @@ namespace rg
             frame.swapchain_set = VK_NULL_HANDLE;
             frame.global_set    = VK_NULL_HANDLE;
 
-            vk_check(
-                DescriptorSetBuilder(device, frame.descriptor_pool)
-                    // Create descriptor set for all swapchains
-                    .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT, frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
-                    .save_descriptor_set(&swapchain_set_layout, &frame.swapchain_set)
-                    // Create descriptor set for global data (for example object matrices)
-                    .add_storage_buffer(VK_SHADER_STAGE_VERTEX_BIT,
-                                        frame.object_info_buffer.buffer,
-                                        sizeof(GPUObjectData) * object_data_capacity)
-                    .save_descriptor_set(&global_set_layout, &frame.global_set)
-                    .build(),
-                "Couldn't build descriptor sets.");
+            vk_check(DescriptorSetBuilder(device, frame.descriptor_pool)
+                         // Create descriptor set for all swapchains
+                         .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
+                         .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
+                         // Create descriptor set for global data (for example object matrices)
+                         .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
+                         .save_descriptor_set(global_set_layout, &frame.global_set)
+                         .build(),
+                     "Couldn't build descriptor sets.");
 
             // Update built version
             frame.built_buffers_config_version = buffer_config_version;
@@ -1431,16 +1466,16 @@ namespace rg
             const auto &module = shader_modules.get(effect.shader_stages[i]);
             check(module.has_value(), "Couldn't get shader module required to build effect.");
 
-            // Convert stage flag
+            // Convert stages flag
             VkShaderStageFlagBits stage_flags = {};
             switch (module->stage)
             {
                 case ShaderStage::VERTEX: stage_flags = VK_SHADER_STAGE_VERTEX_BIT; break;
                 case ShaderStage::FRAGMENT: stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT; break;
-                default: check(false, "Unknown shader stage");
+                default: check(false, "Unknown shader stages");
             }
 
-            // Create shader stage
+            // Create shader stages
             stages[i] = {
                 .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .pNext               = nullptr,
@@ -1523,7 +1558,7 @@ namespace rg
             .pNext            = nullptr,
             .flags            = 0,
             .depthClampEnable = VK_FALSE,
-            // Keep the primitive in the rasterization stage
+            // Keep the primitive in the rasterization stages
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode             = VK_POLYGON_MODE_FILL,
             // No backface culling
@@ -1603,7 +1638,7 @@ namespace rg
         {
             case RenderStageKind::GEOMETRY: render_pass = passes.geometry_pass; break;
             case RenderStageKind::LIGHTING: render_pass = passes.lighting_pass; break;
-            default: check(false, "Invalid render stage kind");
+            default: check(false, "Invalid render stages kind");
         }
 
         // endregion
@@ -1692,13 +1727,13 @@ namespace rg
     {
         if (draw_cache_version > swapchain.built_draw_cache_version)
         {
-            // For each stage
+            // For each stages
             for (auto &stage : swapchain.render_stages)
             {
                 // Clear cache
                 stage.batches.clear();
 
-                // Find the model_ids using the materials using a template using an effect matching the stage
+                // Find the model_ids using the materials using a template using an effect matching the stages
                 // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
                 // this will minimize the number of binds to do
                 Vector<ModelId> stage_models(10);
@@ -1717,13 +1752,17 @@ namespace rg
                         for (const auto &mat_template : material_templates)
                         {
                             // If the template has that effect
-                            if (mat_template.value().shader_effects.includes(effect.key()))
+                            auto effect_i_in_mat = mat_template.value().shader_effects.find_first_of(effect.key());
+                            if (effect_i_in_mat.has_value())
                             {
                                 // For each material
                                 // Note: if this becomes to computationally intensive, we could register materials in the template
                                 // like we do with the models
                                 for (const auto &material : materials)
                                 {
+                                    // Get the textures' descriptor set for this effect
+                                    VkDescriptorSet textures_set = material.value().textures_sets[effect_i_in_mat.value()];
+
                                     // If the material has that template and there is at least one model to render
                                     if (material.value().template_id == mat_template.key()
                                         && !material.value().models_using_material.is_empty())
@@ -1739,6 +1778,7 @@ namespace rg
                                             material.value().models_using_material.size(),
                                             static_cast<VkPipeline>(pipeline.value()->as_ptr),
                                             effect.value().pipeline_layout,
+                                            textures_set,
                                         });
 
                                         // Add the models using that material
@@ -1817,6 +1857,7 @@ namespace rg
         constexpr uint32_t draw_stride       = sizeof(VkDrawIndexedIndirectCommand);
         VkPipeline         bound_pipeline    = VK_NULL_HANDLE;
         bool               global_sets_bound = false;
+        VkDescriptorSet    bound_textures_set = VK_NULL_HANDLE;
 
         if (stage.batches.is_empty())
         {
@@ -1849,6 +1890,20 @@ namespace rg
                                         offsets.size(),
                                         offsets.data());
                 global_sets_bound = true;
+            }
+
+            // Rebind descriptor set if it is different
+            if (bound_textures_set != batch.textures_set && batch.textures_set != VK_NULL_HANDLE)
+            {
+                vkCmdBindDescriptorSets(cmd,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        batch.pipeline_layout,
+                                        2, // We have two global sets before, so this one is the third
+                                        1,
+                                        &batch.textures_set,
+                                        0,
+                                        nullptr);
+                bound_textures_set = batch.textures_set;
             }
 
             // Draw the batch
@@ -2651,6 +2706,28 @@ namespace rg
         }
         // endregion
 
+        // --=== Init global sets ===--
+
+        // Init sets
+        DescriptorSetLayoutBuilder(m_data->device)
+            // Camera buffer
+            .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT)
+            .save_descriptor_set_layout(&m_data->swapchain_set_layout)
+            // Object data
+            .add_storage_buffer(VK_SHADER_STAGE_VERTEX_BIT)
+            .save_descriptor_set_layout(&m_data->global_set_layout);
+        m_data->buffer_config_version++;
+
+        // Create static descriptor pool
+        m_data->static_descriptor_pool = DynamicDescriptorPool(m_data->device,
+                                                               DescriptorBalance {
+                                                                   0,
+                                                                   0,
+                                                                   0,
+                                                                   // Lots of capacity for textures
+                                                                   100,
+                                                               });
+
         // --=== Init frames ===--
 
         // region Init frames
@@ -2717,11 +2794,8 @@ namespace rg
                                                                   4,
                                                                   0,
                                                                   2,
+                                                                  0,
                                                               });
-
-                // Init sets
-                m_data->buffer_config_version++;
-                m_data->update_descriptor_sets(frame);
             }
         }
         // endregion
@@ -2776,6 +2850,9 @@ namespace rg
         // Destroy descriptor layouts
         vkDestroyDescriptorSetLayout(m_data->device, m_data->swapchain_set_layout, nullptr);
         vkDestroyDescriptorSetLayout(m_data->device, m_data->global_set_layout, nullptr);
+
+        // Destroy pool
+        m_data->static_descriptor_pool.clear();
 
         // Clear frames
         for (auto &frame : m_data->frames)
@@ -3032,19 +3109,41 @@ namespace rg
 
     // region Shader effect functions
 
-    ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind)
+    ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages,
+                                                  RenderStageKind              render_stage_kind,
+                                                  const Array<TextureLayout>  &textures)
     {
-        check(stages.size() > 0, "A shader effect must have at least one stage.");
+        check(stages.size() > 0, "A shader effect must have at least one stages.");
 
         // Create shader effect
-        ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
+        ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+        // Get descriptor sets for the pipeline
+        Vector<VkDescriptorSetLayout> descriptor_set_layouts {3};
+        descriptor_set_layouts.push_back(m_data->swapchain_set_layout);
+        descriptor_set_layouts.push_back(m_data->global_set_layout);
+
+        // Create texture set layout
+        if (!textures.is_empty())
+        {
+            DescriptorSetLayoutBuilder builder(m_data->device);
+            for (auto &texture_layout : textures)
+            {
+                // Convert stages to Vk stages
+                VkShaderStageFlags textureStages = convert_shader_stages(texture_layout.stages);
+
+                // Add binding
+                // For now, we assume a combined image sampler binding
+                builder.add_combined_image_sampler(textureStages);
+            }
+            // Save the layout
+            builder.save_descriptor_set_layout(&effect.textures_set_layout);
+
+            // Add the layout to the list
+            descriptor_set_layouts.push_back(effect.textures_set_layout);
+        }
 
         // Create pipeline layout
-        const Array<VkDescriptorSetLayout> descriptor_set_layouts = {
-            m_data->swapchain_set_layout,
-            m_data->global_set_layout,
-        };
-
         VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext                  = nullptr,
@@ -3073,6 +3172,11 @@ namespace rg
         if (res.has_value())
         {
             vkDestroyPipelineLayout(m_data->device, res.value().pipeline_layout, nullptr);
+            if (res.value().textures_set_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_data->device, res.value().textures_set_layout, nullptr);
+            }
+
             m_data->shader_modules.remove(id);
         }
         // No value = already deleted, in a sense. This is not an error since the contract is respected
@@ -3082,6 +3186,10 @@ namespace rg
         for (auto &effect : m_data->shader_effects)
         {
             vkDestroyPipelineLayout(m_data->device, effect.value().pipeline_layout, nullptr);
+            if (effect.value().textures_set_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_data->device, effect.value().textures_set_layout, nullptr);
+            }
         }
         m_data->shader_effects.clear();
     }
@@ -3116,20 +3224,60 @@ namespace rg
 
     // region Material functions
 
-    MaterialId Renderer::create_material(MaterialTemplateId material_template)
+    MaterialId Renderer::create_material(MaterialTemplateId material_template, const Array<Array<TextureId>> &textures)
+    {
+        auto textures_copy = textures;
+        return create_material(material_template, std::move(textures_copy));
+    }
+
+    MaterialId Renderer::create_material(MaterialTemplateId material_template, Array<Array<TextureId>> &&textures)
     {
         check(material_template != NULL_ID, "A material must have a template.");
+
+        // Get layout
+        auto mat_template = m_data->material_templates[material_template];
+
+        Array<VkDescriptorSet> descriptor_sets {textures.size()};
+        DescriptorSetBuilder   builder(m_data->device, m_data->static_descriptor_pool);
+
+        // For each supported effect that has textures
+        for (size_t i = 0; i < textures.size(); i++)
+        {
+            auto effect_texture_ids = textures[i];
+
+            if (!effect_texture_ids.is_empty())
+            {
+                auto shader_effect = m_data->shader_effects[mat_template.shader_effects[i]];
+
+                // Create the descriptor set
+                for (auto tex_id : effect_texture_ids)
+                {
+                    auto texture = m_data->textures[tex_id];
+                    builder.add_combined_image_sampler(texture.sampler, texture.image.image_view);
+                }
+                builder.save_descriptor_set(shader_effect.textures_set_layout, &descriptor_sets[i]);
+            }
+            else {
+                // No textures, set to null
+                descriptor_sets[i] = VK_NULL_HANDLE;
+            }
+        }
+
+        vk_check(builder.build());
 
         // Create material
         return m_data->materials.push({
             material_template,
             Vector<ModelId>(10),
+            std::move(textures),
+            std::move(descriptor_sets),
         });
     }
 
     void Renderer::destroy_material(MaterialId id)
     {
         // There is no special vulkan handle to destroy in the material, so we just let the storage do its job
+        // The descriptor set will be freed when resetting the pool
         m_data->materials.remove(id);
     }
 
@@ -3554,7 +3702,7 @@ namespace rg
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
 
-                // Update render stage cache if needed
+                // Update render stages cache if needed
                 m_data->update_stage_cache(swapchain);
 
                 // Begin recording
