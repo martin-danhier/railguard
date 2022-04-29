@@ -14,7 +14,7 @@ namespace rg
     {
     }
 
-    MeshPartId MeshPart::load_from_obj(const char *filename, Renderer &renderer)
+    MeshPartId MeshPart::load_from_obj(const char *filename, Renderer &renderer, bool duplicate_vertices)
     {
         // Attrib will contain the vertex arrays
         tinyobj::attrib_t attrib;
@@ -54,60 +54,108 @@ namespace rg
         Vector<Triangle> triangles(shapes.size() * vertices_per_face);
 
         // Add all vertices
-        for (auto i = 0; i < attrib.vertices.size(); i += vertices_per_face)
+        if (!duplicate_vertices)
         {
-            vertices.push_back(Vertex {
-                .position = {attrib.vertices[i], attrib.vertices[i + 1], attrib.vertices[i + 2]},
-            });
-        }
-
-        // For now, we merge all the shapes into one mesh part
-        // When the tree structure is implemented, we will have to split the mesh into mesh parts
-        // TODO
-        for (auto &shape : shapes)
-        {
-            // We have an indexed model, but not as much as the Wavefront format
-            // The wavefront format supports having 3 indices per vertex to also avoid duplicating normals and texture coords
-            // Here, we only have one index per vertex
-            // So we will need to store the normals and texture coords with the vertex itself
-
-            // Note that for now, this doesn't support having several values for the same vertex in different faces
-            // If the values change, later faces will overwrite the first
-            // Maybe later, store normals and texture coords separately and find a way to index them
-            // Alternatively, duplicate a vertex if the combination with normal and tex coords change.
-
-            size_t index_offset = 0;
-
-            // For each face
-            for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+            for (auto i = 0; i < attrib.vertices.size(); i += vertices_per_face)
             {
-                Triangle triangle {0, 0, 0};
+                vertices.push_back(Vertex {
+                    .position = {attrib.vertices[i], attrib.vertices[i + 1], attrib.vertices[i + 2]},
+                });
+            }
 
-                // For each vertex of that face
-                for (size_t v = 0; v < vertices_per_face; v++)
+            // For now, we merge all the shapes into one mesh part
+            // When the tree structure is implemented, we will have to split the mesh into mesh parts
+            // TODO
+            for (auto &shape : shapes)
+            {
+                // We have an indexed model, but not as much as the Wavefront format
+                // The wavefront format supports having 3 indices per vertex to also avoid duplicating normals and texture
+                // coords
+                // Here, we only have one index per vertex
+                // So we will need to store the normals and texture coords with the vertex itself
+
+                // Note that for now, this doesn't support having several values for the same vertex in different faces
+                // If the values change, later faces will overwrite the first
+                // Maybe later, store normals and texture coords separately and find a way to index them
+                // Alternatively, duplicate a vertex if the combination with normal and tex coords change.
+
+                size_t index_offset = 0;
+
+                // For each face
+                for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
                 {
-                    tinyobj::index_t idx = shape.mesh.indices[index_offset + v];
+                    Triangle triangle {0, 0, 0};
 
-                    // Store triangle indices for index buffer
-                    triangle.index[v] = idx.vertex_index;
+                    // For each vertex of that face
+                    for (size_t v = 0; v < vertices_per_face; v++)
+                    {
+                        tinyobj::index_t idx = shape.mesh.indices[index_offset + v];
 
-                    // Store the normal in the associated vertex
-                    vertices[idx.vertex_index].normal = glm::vec3 {
-                        attrib.normals[3 * idx.normal_index + 0],
-                        attrib.normals[3 * idx.normal_index + 1],
-                        attrib.normals[3 * idx.normal_index + 2],
-                    };
+                        // Store triangle indices for index buffer
+                        triangle.index[v] = idx.vertex_index;
 
-                    // Store the texture coords as well
-                    vertices[idx.vertex_index].tex_coord = glm::vec2 {
-                        attrib.texcoords[3 * idx.texcoord_index + 0],
-                        attrib.texcoords[3 * idx.texcoord_index + 1],
-                    };
+                        // Store the normal in the associated vertex
+                        vertices[idx.vertex_index].normal = glm::vec3 {
+                            attrib.normals[3 * idx.normal_index + 0],
+                            attrib.normals[3 * idx.normal_index + 1],
+                            attrib.normals[3 * idx.normal_index + 2],
+                        };
+
+                        // Store the texture coords as well
+                        vertices[idx.vertex_index].tex_coord = glm::vec2 {
+                            attrib.texcoords[2 * idx.texcoord_index + 0],
+                            1 - attrib.texcoords[2 * idx.texcoord_index + 1],
+                        };
+                    }
+
+                    triangles.push_back(triangle);
+
+                    index_offset += vertices_per_face;
                 }
+            }
+        }
+        else
+        {
+            for (auto &shape : shapes)
+            {
+                size_t index_offset = 0;
 
-                triangles.push_back(triangle);
+                // For each face
+                for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); f++)
+                {
+                    Triangle triangle {0, 0, 0};
 
-                index_offset += vertices_per_face;
+                    // For each vertex of that face
+                    for (size_t v = 0; v < vertices_per_face; v++)
+                    {
+                        tinyobj::index_t idx = shape.mesh.indices[index_offset + v];
+                        // Store triangle indices for index buffer
+                        triangle.index[v] = vertices.size();
+
+                        vertices.push_back(Vertex {
+                            .position =
+                                glm::vec3 {
+                                    attrib.vertices[3 * idx.vertex_index + 0],
+                                    attrib.vertices[3 * idx.vertex_index + 1],
+                                    attrib.vertices[3 * idx.vertex_index + 2],
+                                },
+                            .normal =
+                                glm::vec3 {
+                                    attrib.normals[3 * idx.normal_index + 0],
+                                    attrib.normals[3 * idx.normal_index + 1],
+                                    attrib.normals[3 * idx.normal_index + 2],
+                                },
+                            .tex_coord =
+                                glm::vec2 {
+                                    attrib.texcoords[2 * idx.texcoord_index + 0],
+                                    1 - attrib.texcoords[2 * idx.texcoord_index + 1],
+                                },
+                        });
+                    }
+
+                    triangles.push_back(triangle);
+                    index_offset += vertices_per_face;
+                }
             }
         }
 

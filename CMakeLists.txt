@@ -18,8 +18,8 @@ set(settings
 )
 
 # Enable/disable sanitizers
-set(enable_asan  1)
-set(enable_ubsan 1)
+set(enable_asan  0)
+set(enable_ubsan 0)
 
 # Enable/disable interactivity
 # Setting this to 0 will add timers to ensure that no test is blocked in a loop, waiting for user input.
@@ -73,6 +73,10 @@ set(test_resources
     tests/resources/meshes/cube.mtl
     tests/resources/meshes/monkey.obj
     tests/resources/meshes/monkey.mtl
+    tests/resources/meshes/lost_empire.mtl
+    tests/resources/meshes/lost_empire.obj
+    tests/resources/textures/lost_empire-RGBA.png
+    tests/resources/textures/lost_empire-RGB.png
 )
 
 ##################################################################
@@ -120,8 +124,16 @@ if (DEFINED ENV{CI})
     set(enable_ubsan 0)
 endif()
 
-set(is_msvc ${CMAKE_C_COMPILER_ID} STREQUAL "MSVC")
-set(is_mingw ${CMAKE_C_COMPILER_ID} STREQUAL "GNU" AND WIN32)
+if(${CMAKE_C_COMPILER_ID} STREQUAL "MSVC")
+    set(is_msvc 1)
+else()
+    set(is_msvc 0)
+endif()
+if(${CMAKE_C_COMPILER_ID} STREQUAL "GNU" AND WIN32)
+    set(is_mingw 1)
+else()
+    set(is_mingw 0)
+endif()
 
 # Enable sanitizers if variable is 1
 if (${enable_asan} STREQUAL "1" AND NOT ${is_mingw})
@@ -191,6 +203,7 @@ if (DEFINED RENDERER_VULKAN)
         Vulkan::Vulkan
         volk
         vma
+        stb_image
     )
 endif()
 

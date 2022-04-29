@@ -1,8 +1,10 @@
 #pragma once
 
 #include <railguard/utils/array_like.h>
+#include <railguard/utils/optional.h>
 
 #include <cstddef>
+#include <iostream>
 #include <iterator>
 
 namespace rg
@@ -12,37 +14,44 @@ namespace rg
     class Array : public ArrayLike<T>
     {
       private:
-        using Base = ArrayLike<T>;
-
         size_t m_count = 0;
         T     *m_data  = nullptr;
 
       public:
         // Constructor
 
-        constexpr Array() = default;
-
-        constexpr explicit Array(size_t count) : m_count(count), m_data(new T[count])
+        constexpr Array() : m_count(0), m_data(nullptr)
         {
-            // Set all elements to zero
-            for (size_t i = 0; i < m_count; ++i)
+        }
+
+        explicit Array(size_t count) : m_count(count), m_data(nullptr)
+        {
+            if (count > 0)
             {
-                m_data[i] = T();
+                m_data = new T[count];
+
+                // Set all elements to zero
+                for (size_t i = 0; i < m_count; ++i)
+                {
+                    T *slot = &m_data[i];
+                    new (slot) T();
+                }
             }
         }
 
-        constexpr Array(const Array &other)
+        Array(const Array &other)
         {
             // Deep copy
             m_count = other.m_count;
             m_data  = new T[m_count];
             for (size_t i = 0; i < m_count; ++i)
             {
-                m_data[i] = other.m_data[i];
+                T *slot = &m_data[i];
+                new (slot) T(other.m_data[i]);
             }
         }
 
-        constexpr Array(Array &&other) noexcept
+        Array(Array &&other) noexcept
         {
             // Move
             m_count       = other.m_count;
@@ -103,7 +112,19 @@ namespace rg
             size_t i = 0;
             for (auto &elem : list)
             {
-                m_data[i] = std::move(elem);
+                T *slot = &m_data[i];
+                new (slot) T(elem);
+                ++i;
+            }
+        }
+        Array(std::initializer_list<T> &&list) : m_count(list.size()), m_data(new T[m_count])
+        {
+            // Copy elements
+            size_t i = 0;
+            for (auto &elem : list)
+            {
+                T *slot = &m_data[i];
+                new (slot) T(std::move(elem));
                 ++i;
             }
         }
@@ -113,9 +134,9 @@ namespace rg
             if (m_data != nullptr)
             {
                 // Call destructor on all elements
-                for (size_t i = 0; i < m_count; ++i)
+                for (const auto &elem : *this)
                 {
-                    m_data[i].~T();
+                    elem.~T();
                 }
 
                 delete[] m_data;
@@ -127,11 +148,19 @@ namespace rg
         // Operators
         T &operator[](size_t index)
         {
+            if (index >= m_count)
+            {
+                throw std::out_of_range("Array index out of range");
+            }
             return m_data[index];
         }
 
         const T &operator[](size_t index) const
         {
+            if (index >= m_count)
+            {
+                throw std::out_of_range("Array index out of range");
+            }
             return m_data[index];
         }
 
@@ -173,6 +202,17 @@ namespace rg
             return false;
         }
 
+        Optional<size_t> find_first_of(const T &value) const
+        {
+            for (size_t i = 0; i < m_count; ++i)
+            {
+                if (m_data[i] == value)
+                {
+                    return Optional {i};
+                }
+            }
+            return {};
+        }
     };
 
 } // namespace rg

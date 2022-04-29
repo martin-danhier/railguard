@@ -74,7 +74,7 @@ namespace rg
          * Loads a mesh part from an OBJ file and stores it in the renderer.
          * @return the id of the mesh part in the renderer, or NULL_ID if it failed.
          */
-        static MeshPartId load_from_obj(const char *filename, Renderer &renderer);
+        static MeshPartId load_from_obj(const char *filename, Renderer &renderer, bool duplicate_vertices = false);
     };
 
 } // namespace rg

@@ -12,6 +12,7 @@
 #include <cstring>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <iostream>
+#include <stb_image.h>
 #include <string>
 #include <volk.h>
 
@@ -86,7 +87,8 @@ namespace rg
                                                   VkExtent3D         image_extent,
                                                   VkImageUsageFlags  image_usage,
                                                   VkImageAspectFlags image_aspect,
-                                                  VmaMemoryUsage     memory_usage) const;
+                                                  VmaMemoryUsage     memory_usage,
+                                                  bool               concurrent = false) const;
         void                         destroy_image(AllocatedImage &image) const;
 
         [[nodiscard]] AllocatedBuffer create_buffer(size_t             allocation_size,
@@ -113,15 +115,27 @@ namespace rg
         /** Array of shader module ID. Shader stages of the pipeline, in order. */
         Array<ShaderModuleId> shader_stages   = {};
         VkPipelineLayout      pipeline_layout = VK_NULL_HANDLE;
+        /** Layout of the textures set.
+         *
+         * Each shader configuration is designed for a specific arrangement of textures (normal map, etc).
+         * All materials that use this shader thus need to respect the same layout.
+         */
+        VkDescriptorSetLayout textures_set_layout = VK_NULL_HANDLE;
     };
 
     struct MaterialTemplate
     {
         /**
          * Array of shader effect IDs. Available effects for this template.
-         * Given a render stage kind, the first corresponding effect will be the one used.
+         * Given a render stages kind, the first corresponding effect will be the one used.
          * */
         Array<ShaderEffectId> shader_effects = {};
+    };
+
+    struct Texture
+    {
+        AllocatedImage image   = {};
+        VkSampler      sampler = VK_NULL_HANDLE;
     };
 
     struct Material
@@ -129,7 +143,9 @@ namespace rg
         /** Template this material is based on. Defines the available shader effects for this material. */
         MaterialTemplateId template_id = NULL_ID;
         /** Models using this material */
-        Vector<ModelId> models_using_material = {};
+        Vector<ModelId>         models_using_material = {};
+        Array<Array<TextureId>> textures              = {};
+        Array<VkDescriptorSet>  textures_sets         = {};
     };
 
     struct StoredMeshPart
@@ -181,7 +197,8 @@ namespace rg
 
     struct TransferContext
     {
-        VkCommandPool           command_pool = VK_NULL_HANDLE;
+        VkCommandPool           transfer_pool = VK_NULL_HANDLE;
+        VkCommandPool           graphics_pool = VK_NULL_HANDLE;
         Vector<TransferCommand> commands {2};
     };
 
@@ -227,6 +244,7 @@ namespace rg
         size_t           count           = 0;
         VkPipeline       pipeline        = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+        VkDescriptorSet  textures_set    = VK_NULL_HANDLE;
     };
 
     struct RenderStage
@@ -338,6 +356,7 @@ namespace rg
         Storage<ShaderModule>     shader_modules     = {};
         Storage<ShaderEffect>     shader_effects     = {};
         Storage<MaterialTemplate> material_templates = {};
+        Storage<Texture>          textures           = {};
         Storage<Material>         materials          = {};
         Storage<Model>            models             = {};
         Storage<RenderNode>       render_nodes       = {};
@@ -350,6 +369,9 @@ namespace rg
 
         // Storage buffer sizes
         size_t object_data_capacity = 100;
+
+        // Descriptor pool for sets that don't need to change per frame
+        DynamicDescriptorPool static_descriptor_pool = {};
 
         // Descriptor layouts
         VkDescriptorSetLayout global_set_layout    = VK_NULL_HANDLE;
@@ -392,7 +414,7 @@ namespace rg
         void                     recreate_pipelines(Swapchain &swapchain);
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
         void                     update_storage_buffers(FrameData &frame);
-        void                     update_descriptor_sets(FrameData &frame);
+        void                     update_descriptor_sets(FrameData &frame) const;
 
         void update_stage_cache(Swapchain &swapchain);
 
@@ -407,7 +429,7 @@ namespace rg
         void                                        update_mesh_buffers();
 
         // Transfer
-        TransferCommand create_transfer_command() const;
+        TransferCommand create_transfer_command(VkCommandPool pool) const;
         void            reset_transfer_context();
     };
 
@@ -473,6 +495,32 @@ namespace rg
             // TODO maybe recoverable ?
             exit(1);
         }
+    }
+
+    // endregion
+
+    // region Conversion to Vk types
+
+    VkShaderStageFlags convert_shader_stages(ShaderStage stage, bool forceOne = false)
+    {
+        VkShaderStageFlags result = 0;
+
+        if (forceOne)
+        {
+            check(stage == ShaderStage::VERTEX || stage == ShaderStage::FRAGMENT, "Expected a single shader stages, got multiple.");
+        }
+
+        // Stage can be a mask
+        if (stage & ShaderStage::VERTEX)
+        {
+            result |= VK_SHADER_STAGE_VERTEX_BIT;
+        }
+        if (stage & ShaderStage::FRAGMENT)
+        {
+            result |= VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
+
+        return result;
     }
 
     // endregion
@@ -781,7 +829,8 @@ namespace rg
                                            VkExtent3D         image_extent,
                                            VkImageUsageFlags  image_usage,
                                            VkImageAspectFlags image_aspect,
-                                           VmaMemoryUsage     memory_usage) const
+                                           VmaMemoryUsage     memory_usage,
+                                           bool               concurrent) const
     {
         // We use VMA for now. We can always switch to a custom allocator later if we want to.
         AllocatedImage image;
@@ -807,6 +856,19 @@ namespace rg
             .pQueueFamilyIndices   = nullptr,
             .initialLayout         = VK_IMAGE_LAYOUT_UNDEFINED,
         };
+
+        // Sharing mode
+        if (concurrent && m_graphics_queue_family != m_transfer_queue_family)
+        {
+            image_create_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            Array<uint32_t> queue_indices = {
+                m_graphics_queue_family,
+                m_transfer_queue_family,
+            };
+            image_create_info.pQueueFamilyIndices   = queue_indices.data();
+            image_create_info.queueFamilyIndexCount = static_cast<uint32_t>(queue_indices.size());
+        }
+
         VmaAllocationCreateInfo alloc_create_info = {
             .usage          = memory_usage,
             .preferredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
@@ -1334,7 +1396,7 @@ namespace rg
 
     // region Descriptor sets functions
 
-    void Renderer::Data::update_descriptor_sets(FrameData &frame)
+    void Renderer::Data::update_descriptor_sets(FrameData &frame) const
     {
         // If the built version is out of date, rebuild
         // Otherwise, we can just reuse the descriptor sets from the last frame
@@ -1345,18 +1407,15 @@ namespace rg
             frame.swapchain_set = VK_NULL_HANDLE;
             frame.global_set    = VK_NULL_HANDLE;
 
-            vk_check(
-                DescriptorSetBuilder(device, frame.descriptor_pool)
-                    // Create descriptor set for all swapchains
-                    .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT, frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
-                    .save_descriptor_set(&swapchain_set_layout, &frame.swapchain_set)
-                    // Create descriptor set for global data (for example object matrices)
-                    .add_storage_buffer(VK_SHADER_STAGE_VERTEX_BIT,
-                                        frame.object_info_buffer.buffer,
-                                        sizeof(GPUObjectData) * object_data_capacity)
-                    .save_descriptor_set(&global_set_layout, &frame.global_set)
-                    .build(),
-                "Couldn't build descriptor sets.");
+            vk_check(DescriptorSetBuilder(device, frame.descriptor_pool)
+                         // Create descriptor set for all swapchains
+                         .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
+                         .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
+                         // Create descriptor set for global data (for example object matrices)
+                         .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
+                         .save_descriptor_set(global_set_layout, &frame.global_set)
+                         .build(),
+                     "Couldn't build descriptor sets.");
 
             // Update built version
             frame.built_buffers_config_version = buffer_config_version;
@@ -1407,16 +1466,16 @@ namespace rg
             const auto &module = shader_modules.get(effect.shader_stages[i]);
             check(module.has_value(), "Couldn't get shader module required to build effect.");
 
-            // Convert stage flag
+            // Convert stages flag
             VkShaderStageFlagBits stage_flags = {};
             switch (module->stage)
             {
                 case ShaderStage::VERTEX: stage_flags = VK_SHADER_STAGE_VERTEX_BIT; break;
                 case ShaderStage::FRAGMENT: stage_flags = VK_SHADER_STAGE_FRAGMENT_BIT; break;
-                default: check(false, "Unknown shader stage");
+                default: check(false, "Unknown shader stages");
             }
 
-            // Create shader stage
+            // Create shader stages
             stages[i] = {
                 .sType               = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                 .pNext               = nullptr,
@@ -1499,7 +1558,7 @@ namespace rg
             .pNext            = nullptr,
             .flags            = 0,
             .depthClampEnable = VK_FALSE,
-            // Keep the primitive in the rasterization stage
+            // Keep the primitive in the rasterization stages
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode             = VK_POLYGON_MODE_FILL,
             // No backface culling
@@ -1579,7 +1638,7 @@ namespace rg
         {
             case RenderStageKind::GEOMETRY: render_pass = passes.geometry_pass; break;
             case RenderStageKind::LIGHTING: render_pass = passes.lighting_pass; break;
-            default: check(false, "Invalid render stage kind");
+            default: check(false, "Invalid render stages kind");
         }
 
         // endregion
@@ -1668,13 +1727,13 @@ namespace rg
     {
         if (draw_cache_version > swapchain.built_draw_cache_version)
         {
-            // For each stage
+            // For each stages
             for (auto &stage : swapchain.render_stages)
             {
                 // Clear cache
                 stage.batches.clear();
 
-                // Find the model_ids using the materials using a template using an effect matching the stage
+                // Find the model_ids using the materials using a template using an effect matching the stages
                 // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
                 // this will minimize the number of binds to do
                 Vector<ModelId> stage_models(10);
@@ -1693,13 +1752,17 @@ namespace rg
                         for (const auto &mat_template : material_templates)
                         {
                             // If the template has that effect
-                            if (mat_template.value().shader_effects.includes(effect.key()))
+                            auto effect_i_in_mat = mat_template.value().shader_effects.find_first_of(effect.key());
+                            if (effect_i_in_mat.has_value())
                             {
                                 // For each material
                                 // Note: if this becomes to computationally intensive, we could register materials in the template
                                 // like we do with the models
                                 for (const auto &material : materials)
                                 {
+                                    // Get the textures' descriptor set for this effect
+                                    VkDescriptorSet textures_set = material.value().textures_sets[effect_i_in_mat.value()];
+
                                     // If the material has that template and there is at least one model to render
                                     if (material.value().template_id == mat_template.key()
                                         && !material.value().models_using_material.is_empty())
@@ -1715,6 +1778,7 @@ namespace rg
                                             material.value().models_using_material.size(),
                                             static_cast<VkPipeline>(pipeline.value()->as_ptr),
                                             effect.value().pipeline_layout,
+                                            textures_set,
                                         });
 
                                         // Add the models using that material
@@ -1793,6 +1857,7 @@ namespace rg
         constexpr uint32_t draw_stride       = sizeof(VkDrawIndexedIndirectCommand);
         VkPipeline         bound_pipeline    = VK_NULL_HANDLE;
         bool               global_sets_bound = false;
+        VkDescriptorSet    bound_textures_set = VK_NULL_HANDLE;
 
         if (stage.batches.is_empty())
         {
@@ -1825,6 +1890,20 @@ namespace rg
                                         offsets.size(),
                                         offsets.data());
                 global_sets_bound = true;
+            }
+
+            // Rebind descriptor set if it is different
+            if (bound_textures_set != batch.textures_set && batch.textures_set != VK_NULL_HANDLE)
+            {
+                vkCmdBindDescriptorSets(cmd,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        batch.pipeline_layout,
+                                        2, // We have two global sets before, so this one is the third
+                                        1,
+                                        &batch.textures_set,
+                                        0,
+                                        nullptr);
+                bound_textures_set = batch.textures_set;
             }
 
             // Draw the batch
@@ -1929,8 +2008,8 @@ namespace rg
         if (should_update_mesh_buffers)
         {
             // Create transfer commands
-            TransferCommand vb_transfer_command = create_transfer_command();
-            TransferCommand ib_transfer_command = create_transfer_command();
+            TransferCommand vb_transfer_command = create_transfer_command(transfer_context.transfer_pool);
+            TransferCommand ib_transfer_command = create_transfer_command(transfer_context.transfer_pool);
 
             constexpr size_t vertex_size   = MeshPart::vertex_byte_size();
             constexpr size_t triangle_size = MeshPart::triangle_byte_size();
@@ -2148,23 +2227,27 @@ namespace rg
         for (auto &command : transfer_context.commands)
         {
             // Destroy the staging buffers
-            allocator.destroy_buffer(command.staging_buffer);
+            if (command.staging_buffer.is_valid())
+            {
+                allocator.destroy_buffer(command.staging_buffer);
+            }
             // Destroy fence
             vkDestroyFence(device, command.fence, nullptr);
         }
 
         // Reset command pool
-        vkResetCommandPool(device, transfer_context.command_pool, 0);
+        vkResetCommandPool(device, transfer_context.transfer_pool, 0);
+        vkResetCommandPool(device, transfer_context.graphics_pool, 0);
 
         // Clear the commands
         transfer_context.commands.clear();
     }
 
-    TransferCommand Renderer::Data::create_transfer_command() const
+    TransferCommand Renderer::Data::create_transfer_command(VkCommandPool pool) const
     {
         const VkCommandBufferAllocateInfo cmd_allocate_info = {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool        = transfer_context.command_pool,
+            .commandPool        = pool,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
@@ -2623,6 +2706,28 @@ namespace rg
         }
         // endregion
 
+        // --=== Init global sets ===--
+
+        // Init sets
+        DescriptorSetLayoutBuilder(m_data->device)
+            // Camera buffer
+            .add_dynamic_uniform_buffer(VK_SHADER_STAGE_VERTEX_BIT)
+            .save_descriptor_set_layout(&m_data->swapchain_set_layout)
+            // Object data
+            .add_storage_buffer(VK_SHADER_STAGE_VERTEX_BIT)
+            .save_descriptor_set_layout(&m_data->global_set_layout);
+        m_data->buffer_config_version++;
+
+        // Create static descriptor pool
+        m_data->static_descriptor_pool = DynamicDescriptorPool(m_data->device,
+                                                               DescriptorBalance {
+                                                                   0,
+                                                                   0,
+                                                                   0,
+                                                                   // Lots of capacity for textures
+                                                                   100,
+                                                               });
+
         // --=== Init frames ===--
 
         // region Init frames
@@ -2689,11 +2794,8 @@ namespace rg
                                                                   4,
                                                                   0,
                                                                   2,
+                                                                  0,
                                                               });
-
-                // Init sets
-                m_data->buffer_config_version++;
-                m_data->update_descriptor_sets(frame);
             }
         }
         // endregion
@@ -2707,8 +2809,9 @@ namespace rg
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = m_data->transfer_queue.family_index,
         };
-        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.command_pool),
-                 "Couldn't create do_transfer command pool");
+        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.transfer_pool));
+        command_pool_create_info.queueFamilyIndex = m_data->graphics_queue.family_index;
+        vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.graphics_pool));
     }
 
     // region Base renderer functions
@@ -2730,7 +2833,8 @@ namespace rg
 
         // Destroy do_transfer context
         m_data->reset_transfer_context();
-        vkDestroyCommandPool(m_data->device, m_data->transfer_context.command_pool, nullptr);
+        vkDestroyCommandPool(m_data->device, m_data->transfer_context.transfer_pool, nullptr);
+        vkDestroyCommandPool(m_data->device, m_data->transfer_context.graphics_pool, nullptr);
 
         // Destroy vertex and index buffers
         if (m_data->vertex_buffer.is_valid())
@@ -2746,6 +2850,9 @@ namespace rg
         // Destroy descriptor layouts
         vkDestroyDescriptorSetLayout(m_data->device, m_data->swapchain_set_layout, nullptr);
         vkDestroyDescriptorSetLayout(m_data->device, m_data->global_set_layout, nullptr);
+
+        // Destroy pool
+        m_data->static_descriptor_pool.clear();
 
         // Clear frames
         for (auto &frame : m_data->frames)
@@ -2771,6 +2878,7 @@ namespace rg
         clear_render_nodes();
         clear_models();
         clear_mesh_parts();
+        clear_textures();
         clear_materials();
         clear_material_templates();
         clear_shader_effects();
@@ -3001,19 +3109,41 @@ namespace rg
 
     // region Shader effect functions
 
-    ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages, RenderStageKind render_stage_kind)
+    ShaderEffectId Renderer::create_shader_effect(const Array<ShaderModuleId> &stages,
+                                                  RenderStageKind              render_stage_kind,
+                                                  const Array<TextureLayout>  &textures)
     {
-        check(stages.size() > 0, "A shader effect must have at least one stage.");
+        check(stages.size() > 0, "A shader effect must have at least one stages.");
 
         // Create shader effect
-        ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE};
+        ShaderEffect effect {render_stage_kind, stages, VK_NULL_HANDLE, VK_NULL_HANDLE};
+
+        // Get descriptor sets for the pipeline
+        Vector<VkDescriptorSetLayout> descriptor_set_layouts {3};
+        descriptor_set_layouts.push_back(m_data->swapchain_set_layout);
+        descriptor_set_layouts.push_back(m_data->global_set_layout);
+
+        // Create texture set layout
+        if (!textures.is_empty())
+        {
+            DescriptorSetLayoutBuilder builder(m_data->device);
+            for (auto &texture_layout : textures)
+            {
+                // Convert stages to Vk stages
+                VkShaderStageFlags textureStages = convert_shader_stages(texture_layout.stages);
+
+                // Add binding
+                // For now, we assume a combined image sampler binding
+                builder.add_combined_image_sampler(textureStages);
+            }
+            // Save the layout
+            builder.save_descriptor_set_layout(&effect.textures_set_layout);
+
+            // Add the layout to the list
+            descriptor_set_layouts.push_back(effect.textures_set_layout);
+        }
 
         // Create pipeline layout
-        const Array<VkDescriptorSetLayout> descriptor_set_layouts = {
-            m_data->swapchain_set_layout,
-            m_data->global_set_layout,
-        };
-
         VkPipelineLayoutCreateInfo pipeline_layout_create_info = {
             .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext                  = nullptr,
@@ -3042,6 +3172,11 @@ namespace rg
         if (res.has_value())
         {
             vkDestroyPipelineLayout(m_data->device, res.value().pipeline_layout, nullptr);
+            if (res.value().textures_set_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_data->device, res.value().textures_set_layout, nullptr);
+            }
+
             m_data->shader_modules.remove(id);
         }
         // No value = already deleted, in a sense. This is not an error since the contract is respected
@@ -3051,6 +3186,10 @@ namespace rg
         for (auto &effect : m_data->shader_effects)
         {
             vkDestroyPipelineLayout(m_data->device, effect.value().pipeline_layout, nullptr);
+            if (effect.value().textures_set_layout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(m_data->device, effect.value().textures_set_layout, nullptr);
+            }
         }
         m_data->shader_effects.clear();
     }
@@ -3085,20 +3224,60 @@ namespace rg
 
     // region Material functions
 
-    MaterialId Renderer::create_material(MaterialTemplateId material_template)
+    MaterialId Renderer::create_material(MaterialTemplateId material_template, const Array<Array<TextureId>> &textures)
+    {
+        auto textures_copy = textures;
+        return create_material(material_template, std::move(textures_copy));
+    }
+
+    MaterialId Renderer::create_material(MaterialTemplateId material_template, Array<Array<TextureId>> &&textures)
     {
         check(material_template != NULL_ID, "A material must have a template.");
+
+        // Get layout
+        auto mat_template = m_data->material_templates[material_template];
+
+        Array<VkDescriptorSet> descriptor_sets {textures.size()};
+        DescriptorSetBuilder   builder(m_data->device, m_data->static_descriptor_pool);
+
+        // For each supported effect that has textures
+        for (size_t i = 0; i < textures.size(); i++)
+        {
+            auto effect_texture_ids = textures[i];
+
+            if (!effect_texture_ids.is_empty())
+            {
+                auto shader_effect = m_data->shader_effects[mat_template.shader_effects[i]];
+
+                // Create the descriptor set
+                for (auto tex_id : effect_texture_ids)
+                {
+                    auto texture = m_data->textures[tex_id];
+                    builder.add_combined_image_sampler(texture.sampler, texture.image.image_view);
+                }
+                builder.save_descriptor_set(shader_effect.textures_set_layout, &descriptor_sets[i]);
+            }
+            else {
+                // No textures, set to null
+                descriptor_sets[i] = VK_NULL_HANDLE;
+            }
+        }
+
+        vk_check(builder.build());
 
         // Create material
         return m_data->materials.push({
             material_template,
             Vector<ModelId>(10),
+            std::move(textures),
+            std::move(descriptor_sets),
         });
     }
 
     void Renderer::destroy_material(MaterialId id)
     {
         // There is no special vulkan handle to destroy in the material, so we just let the storage do its job
+        // The descriptor set will be freed when resetting the pool
         m_data->materials.remove(id);
     }
 
@@ -3248,6 +3427,238 @@ namespace rg
     }
     // endregion
 
+    // region Textures
+
+    TextureId Renderer::load_texture(const char *path, FilterMode filter_mode)
+    {
+        // Load image
+        int32_t  width, height, tex_channels;
+        stbi_uc *pixels = stbi_load(path, &width, &height, &tex_channels, STBI_rgb_alpha);
+        if (pixels == nullptr)
+        {
+            std::cerr << "Failed to load texture: " << path << std::endl;
+            return NULL_ID;
+        }
+
+        const VkDeviceSize image_size = width * height * 4;
+
+        // Create staging buffer
+        TransferCommand cmd = m_data->create_transfer_command(m_data->transfer_context.transfer_pool);
+        cmd.staging_buffer  = m_data->allocator.create_buffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VMA_MEMORY_USAGE_CPU_ONLY);
+
+        // Copy pixels to staging buffer
+        void *data = m_data->allocator.map_buffer(cmd.staging_buffer);
+        memcpy(data, pixels, static_cast<size_t>(image_size));
+        m_data->allocator.unmap_buffer(cmd.staging_buffer);
+
+        // Free imported image
+        stbi_image_free(pixels);
+        pixels = nullptr;
+
+        constexpr VkFormat image_format = VK_FORMAT_R8G8B8A8_SRGB;
+        const VkExtent3D   extent       = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+
+        AllocatedImage image = m_data->allocator.create_image(image_format,
+                                                              extent,
+                                                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                                              VMA_MEMORY_USAGE_GPU_ONLY);
+
+        // Do the transfer and conversion
+        cmd.begin();
+
+        VkImageSubresourceRange subresource_range   = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier    barrier_to_transfer = {
+               .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+               .pNext = nullptr,
+               // Access mask
+               .srcAccessMask = 0,
+               .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+               // Image layout
+               .oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED,
+               .newLayout        = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+               .image            = image.image,
+               .subresourceRange = subresource_range,
+        };
+        vkCmdPipelineBarrier(cmd.command_buffer,
+                             VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr,
+                             1,
+                             &barrier_to_transfer);
+
+        // Copy image data from staging buffer to image
+        VkBufferImageCopy copy_region = {
+            .bufferOffset      = 0,
+            .bufferRowLength   = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource  = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+            .imageOffset       = {0, 0, 0},
+            .imageExtent       = extent,
+        };
+        vkCmdCopyBufferToImage(cmd.command_buffer,
+                               cmd.staging_buffer.buffer,
+                               image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               1,
+                               &copy_region);
+
+        if (m_data->graphics_queue.family_index == m_data->transfer_queue.family_index)
+        {
+            // Change its format again
+            VkImageMemoryBarrier barrier_to_readable = barrier_to_transfer;
+            barrier_to_readable.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable.newLayout            = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier_to_readable.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable.dstAccessMask        = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cmd.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable);
+
+            cmd.end_and_submit(m_data->transfer_queue.queue);
+        }
+        else
+        {
+            // Change its format again
+            VkImageMemoryBarrier barrier_to_readable = barrier_to_transfer;
+            barrier_to_readable.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable.newLayout            = VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+            barrier_to_readable.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable.dstAccessMask        = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier_to_readable.srcQueueFamilyIndex  = m_data->transfer_queue.family_index;
+            barrier_to_readable.dstQueueFamilyIndex  = m_data->graphics_queue.family_index;
+            vkCmdPipelineBarrier(cmd.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable);
+            cmd.end_and_submit(m_data->transfer_queue.queue);
+
+            // Continue from the graphics queue
+            TransferCommand cmd2 = m_data->create_transfer_command(m_data->transfer_context.graphics_pool);
+
+            cmd2.begin();
+
+            VkImageMemoryBarrier barrier_to_readable2 = barrier_to_transfer;
+            barrier_to_readable2.oldLayout            = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier_to_readable2.newLayout            = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier_to_readable2.srcAccessMask        = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier_to_readable2.dstAccessMask        = VK_ACCESS_SHADER_READ_BIT;
+            barrier_to_readable2.srcQueueFamilyIndex  = m_data->transfer_queue.family_index;
+            barrier_to_readable2.dstQueueFamilyIndex  = m_data->graphics_queue.family_index;
+            vkCmdPipelineBarrier(cmd2.command_buffer,
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0,
+                                 0,
+                                 nullptr,
+                                 0,
+                                 nullptr,
+                                 1,
+                                 &barrier_to_readable2);
+
+            cmd2.end_and_submit(m_data->graphics_queue.queue);
+            m_data->transfer_context.commands.push_back(cmd2);
+        }
+
+        // Save command
+        m_data->transfer_context.commands.push_back(cmd);
+
+        // Get filter
+        VkFilter filter = VK_FILTER_LINEAR;
+        switch (filter_mode)
+        {
+            case FilterMode::NEAREST: filter = VK_FILTER_NEAREST; break;
+            default: break;
+        }
+
+        // Create sampler
+        VkSamplerCreateInfo sampler_info = {
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            // Filter
+            .magFilter  = filter,
+            .minFilter  = filter,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            // Address mode
+            .addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias              = 0.0f,
+            .anisotropyEnable        = VK_FALSE,
+            .maxAnisotropy           = 1,
+            .compareEnable           = VK_FALSE,
+            .compareOp               = VK_COMPARE_OP_ALWAYS,
+            .minLod                  = 0.0f,
+            .maxLod                  = 0.0f,
+            .borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+            .unnormalizedCoordinates = VK_FALSE,
+        };
+        VkSampler sampler = VK_NULL_HANDLE;
+        vk_check(vkCreateSampler(m_data->device, &sampler_info, nullptr, &sampler), "Failed to create sampler");
+
+        // Store the image
+        return m_data->textures.push(Texture {
+            .image   = image,
+            .sampler = sampler,
+        });
+    }
+
+    void Renderer::destroy_texture(TextureId id)
+    {
+        // Get the texture
+        auto texture = m_data->textures.get(id);
+        if (texture.has_value())
+        {
+            // Destroy the sampler
+            vkDestroySampler(m_data->device, texture->sampler, nullptr);
+
+            // Destroy the image
+            m_data->allocator.destroy_image(texture->image);
+
+            // Remove the texture
+            m_data->textures.remove(id);
+        }
+        // No value = already destroyed
+    }
+
+    void Renderer::clear_textures()
+    {
+        // Destroy all textures
+        for (auto &res : m_data->textures)
+        {
+            auto &texture = res.value();
+
+            // Destroy the sampler
+            vkDestroySampler(m_data->device, texture.sampler, nullptr);
+
+            // Destroy the image
+            m_data->allocator.destroy_image(texture.image);
+        }
+
+        // Clear the textures
+        m_data->textures.clear();
+    }
+
+    // endregion
+
     // region Drawing
 
     void Renderer::draw()
@@ -3291,7 +3702,7 @@ namespace rg
                 // Update pipelines if needed
                 m_data->build_out_of_date_effects(swapchain);
 
-                // Update render stage cache if needed
+                // Update render stages cache if needed
                 m_data->update_stage_cache(swapchain);
 
                 // Begin recording

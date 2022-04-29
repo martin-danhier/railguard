@@ -24,13 +24,13 @@ TEST
     auto fragment_shader = renderer.load_shader_module("resources/shaders/hello/test.frag.spv", rg::ShaderStage::FRAGMENT);
 
     // Create a shader effect
-    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::LIGHTING);
+    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::LIGHTING, {});
 
     // Create a material template
     auto material_template = renderer.create_material_template({hello_effect});
 
     // Create a material
-    auto material = renderer.create_material(material_template);
+    auto material = renderer.create_material(material_template, {{}});
 
     // Create a monkey mesh part
     auto monkey = rg::MeshPart::load_from_obj("resources/meshes/monkey.obj", engine.renderer());

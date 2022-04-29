@@ -1,4 +1,4 @@
-#include <test_framework/test_framework.hpp>
+#include <test_framework/test_framework.h>
 
 #ifdef WINDOW_SDL2
 #define SDL_MAIN_HANDLED
@@ -6,6 +6,7 @@
 
 TEST
 {
+    SDL_SetMainReady();
     SDL_Init(SDL_INIT_VIDEO);
     SDL_WindowFlags window_flags;
 

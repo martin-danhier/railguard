@@ -41,7 +41,7 @@ bool tf_assert_equal(tf_context *context, size_t line_number, const char *file, 
         s += " failed. Expected: ";
         s += expected;
         s += ", got: ";
-        s += actual;
+        s += actual; // TODO find a solution
         s += ".";
         s += recoverable ? "" : " Unable to continue execution.";
 
