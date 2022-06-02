@@ -46,6 +46,7 @@ set(railguard_lib_sources
     src/core/engine.cpp
     src/core/window/window_sdl2.cpp
     src/core/renderer/renderer_vulkan.cpp
+    src/core/renderer/render_pipeline.cpp
     src/core/mesh.cpp
     src/utils/vector_impl.cpp
     src/utils/hash_map.cpp

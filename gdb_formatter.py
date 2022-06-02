@@ -141,10 +141,17 @@ class HashMapPrinter:
         # Get data
         data = self.val['m_data']
 
-        # Get capacity and count
-        self.capacity = data['capacity']
-        self.count = data['count']
-        self.entries = data['entries']
+        # Set to null if empty
+        if data == 0:
+            self.capacity = 0
+            self.count = 0
+            self.entries = None
+        else:
+            print(data)
+            # Get capacity and count
+            self.capacity = data['capacity']
+            self.count = data['count']
+            self.entries = data['entries']
 
     def to_string(self):
         return 'HashMap(capacity=%d, count=%d)' % (self.capacity, self.count)
@@ -162,7 +169,7 @@ class MapPrinter:
     """Prints a rg::Map<T>"""
 
     class _iterator:
-        def __init__(self, storage: VectorPrinter):
+        def __init__(self, storage):
             self.storage_it = storage.children()
 
         def __iter__(self):
@@ -184,10 +191,16 @@ class MapPrinter:
         self.storage = VectorPrinter(val['m_storage'])
 
         # Get hash map
-        map = val['m_hash_map']
-        # Get capacity and count
-        self.capacity = map['m_data']['capacity']
-        self.count = map['m_data']['count']
+        hash_map = val['m_hash_map']
+
+        # Check if m_data is null
+        if hash_map['m_data'] == 0:
+            self.capacity = 0
+            self.count = 0
+        else:
+            # Get capacity and count
+            self.capacity = hash_map['m_data']['capacity']
+            self.count = hash_map['m_data']['count']
 
     def to_string(self):
         return 'Map<%s>(capacity=%d, count=%d)' % (self.value_type, self.capacity, self.count)

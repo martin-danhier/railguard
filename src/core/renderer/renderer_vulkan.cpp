@@ -1,7 +1,8 @@
 #ifdef RENDERER_VULKAN
-#include "railguard/core/renderer.h"
-#include <railguard/core/gpu_structs.h>
+#include "railguard/core/renderer/renderer.h"
 #include <railguard/core/mesh.h>
+#include <railguard/core/renderer/gpu_structs.h>
+#include <railguard/core/renderer/render_pipeline.h>
 #include <railguard/core/window.h>
 #include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
@@ -34,7 +35,6 @@
 #define VULKAN_API_VERSION      VK_API_VERSION_1_2
 #define WAIT_FOR_FENCES_TIMEOUT 1000000000
 #define SEMAPHORE_TIMEOUT       1000000000
-#define RENDER_STAGE_COUNT      2
 
 namespace rg
 {
@@ -247,17 +247,31 @@ namespace rg
         VkDescriptorSet  textures_set    = VK_NULL_HANDLE;
     };
 
-    struct RenderStage
+    /**
+     * A render stage instance is a structure that contain swapchain-specific render stage data, such as the indirect buffer or the
+     * render batches cache.
+     */
+    struct RenderStageInstance
     {
-        RenderStageKind     kind            = RenderStageKind::INVALID;
-        AllocatedBuffer     indirect_buffer = {};
-        Vector<RenderBatch> batches {5};
+        /**
+         * The actual attachments of this stage.
+         * It is structured as an array storing, for each image index, an array of attachments.
+         * There are as many image indices as swapchain images.
+         */
+        Array<Array<AllocatedImage>> attachments = {};
+        /** Array storing, for each image index, the related framebuffer */
+        Array<VkFramebuffer> framebuffers    = {};
+        AllocatedBuffer      indirect_buffer = {};
+        Vector<RenderBatch>  batches {5};
     };
 
-    struct Passes
+    /**
+     * A render stage is a structure that contains the global render stage data, such as Vulkan render passes.
+     */
+    struct RenderStage
     {
-        VkRenderPass geometry_pass = VK_NULL_HANDLE;
-        VkRenderPass lighting_pass = VK_NULL_HANDLE;
+        RenderStageKind kind           = RenderStageKind::INVALID;
+        VkRenderPass    vk_render_pass = VK_NULL_HANDLE;
     };
 
     struct FrameData
@@ -290,25 +304,26 @@ namespace rg
         VkQueue  queue        = VK_NULL_HANDLE;
     };
 
+    struct Attachment
+    {
+        Array<AllocatedImage> extra_images;
+    };
+
     struct Swapchain
     {
         bool           enabled         = false;
         VkSwapchainKHR vk_swapchain    = VK_NULL_HANDLE;
         VkExtent2D     viewport_extent = {};
         uint32_t       window_index    = 0;
+
         // Swapchain images
         uint32_t           image_count  = 0;
         VkSurfaceFormatKHR image_format = {};
-        // Store images
-        Array<VkImage>       images       = {};
-        Array<VkImageView>   image_views  = {};
-        Array<VkFramebuffer> framebuffers = {};
+
         // Present mode
         VkPresentModeKHR              present_mode  = VK_PRESENT_MODE_MAILBOX_KHR;
         VkSurfaceTransformFlagBitsKHR pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-        // Depth image
-        VkFormat       depth_image_format = VK_FORMAT_UNDEFINED;
-        AllocatedImage depth_image        = {};
+
         // Target window
         Window                   *target_window                  = nullptr;
         EventSender<Extent2D>::Id window_resize_event_handler_id = NULL_ID;
@@ -319,8 +334,8 @@ namespace rg
         uint64_t built_effects_version = 0;
 
         // Render stages
-        uint64_t           built_draw_cache_version = 0;
-        Array<RenderStage> render_stages            = {};
+        uint64_t                   built_draw_cache_version = 0;
+        Array<RenderStageInstance> render_stages            = {};
     };
 
     struct Renderer::Data
@@ -330,7 +345,6 @@ namespace rg
         VkPhysicalDevice           physical_device   = VK_NULL_HANDLE;
         VkPhysicalDeviceProperties device_properties = {};
         Allocator                  allocator         = {};
-        Passes                     passes            = {};
 #ifdef USE_VK_VALIDATION_LAYERS
         VkDebugUtilsMessengerEXT debug_messenger = VK_NULL_HANDLE;
 #endif
@@ -340,6 +354,10 @@ namespace rg
          */
         Array<Swapchain> swapchains         = {};
         size_t           swapchain_capacity = 0;
+
+        // Render pipeline
+        RenderPipelineDescription render_pipeline_description = {};
+        Array<RenderStage>        render_stages               = {};
 
         // Queues
         Queue graphics_queue = {};
@@ -420,7 +438,10 @@ namespace rg
 
         void send_camera_data(size_t window_index, const Camera &camera, FrameData &current_frame);
 
-        void draw_from_cache(const RenderStage &stage, VkCommandBuffer cmd, FrameData &current_frame, size_t window_index) const;
+        void draw_from_cache(const RenderStageInstance &stage,
+                             VkCommandBuffer            cmd,
+                             FrameData                 &current_frame,
+                             size_t                     window_index) const;
         template<typename T>
         void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset = 0);
         [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
@@ -521,6 +542,38 @@ namespace rg
         }
 
         return result;
+    }
+
+    /**
+     * Converts railguard format to a Vulkan format.
+     * @param format Original format.
+     * @param window_format The format that we need to use to replace WINDOW_FORMAT
+     */
+    VkFormat convert_format(Format format, VkFormat window_format = VK_FORMAT_UNDEFINED)
+    {
+        switch (format)
+        {
+            case Format::UNDEFINED: return VK_FORMAT_UNDEFINED;
+            case Format::D32_SFLOAT: return VK_FORMAT_D32_SFLOAT;
+            case Format::B8G8R8A8_SRGB: return VK_FORMAT_B8G8R8A8_SRGB;
+            case Format::R8G8B8A8_SRGB: return VK_FORMAT_R8G8B8A8_SRGB;
+            case Format::R8G8B8A8_UINT: return VK_FORMAT_R8G8B8A8_UINT;
+            case Format::R16G16B16A16_SFLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case Format::WINDOW_FORMAT: return window_format;
+            default: return VK_FORMAT_UNDEFINED;
+        }
+    }
+
+    VkImageLayout convert_layout(ImageLayout layout)
+    {
+        switch (layout)
+        {
+            case ImageLayout::UNDEFINED: return VK_IMAGE_LAYOUT_UNDEFINED;
+            case ImageLayout::SHADER_READ_ONLY_OPTIMAL: return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            case ImageLayout::PRESENT_SRC: return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+            case ImageLayout::DEPTH_STENCIL_OPTIMAL: return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            default: return VK_IMAGE_LAYOUT_UNDEFINED;
+        }
     }
 
     // endregion
@@ -910,7 +963,10 @@ namespace rg
     void Allocator::destroy_image(AllocatedImage &image) const
     {
         vkDestroyImageView(m_device, image.image_view, nullptr);
-        vmaDestroyImage(m_allocator, image.image, image.allocation);
+        if (image.allocation != VK_NULL_HANDLE)
+        {
+            vmaDestroyImage(m_allocator, image.image, image.allocation);
+        }
         image.image      = VK_NULL_HANDLE;
         image.allocation = VK_NULL_HANDLE;
         image.image_view = VK_NULL_HANDLE;
@@ -1155,20 +1211,22 @@ namespace rg
 
     void Renderer::Data::destroy_swapchain_inner(Swapchain &swapchain) const
     {
-        // Destroy framebuffers
-        for (auto &framebuffer : swapchain.framebuffers)
+        for (auto &stage : swapchain.render_stages)
         {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
+            for (auto &framebuffer : stage.framebuffers)
+            {
+                // Destroy framebuffers
+                vkDestroyFramebuffer(device, framebuffer, nullptr);
+            }
 
-        // Destroy depth image
-        allocator.destroy_image(swapchain.depth_image);
-
-        // Destroy images
-        for (uint32_t i = 0; i < swapchain.image_count; i++)
-        {
-            vkDestroyImageView(device, swapchain.image_views[i], nullptr);
-            swapchain.image_views[i] = VK_NULL_HANDLE;
+            for (auto &attachments : stage.attachments)
+            {
+                // Destroy images
+                for (auto &attachment : attachments)
+                {
+                    allocator.destroy_image(attachment);
+                }
+            }
         }
 
         // Destroy swapchain
@@ -1252,87 +1310,149 @@ namespace rg
 
         // region Images and image views
 
-        // Get the images
-        uint32_t effective_image_count;
-        vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &effective_image_count, nullptr));
-        swapchain.images = Array<VkImage>(effective_image_count);
-        vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &effective_image_count, swapchain.images.data()));
+        vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &swapchain.image_count, nullptr));
 
-        // Update the image size based on how many were effectively created
-        swapchain.image_count = effective_image_count;
+        // Init stages
 
-        // Create image views for those images
-        swapchain.image_views = Array<VkImageView>(effective_image_count);
-        VkImageViewCreateInfo image_view_create_info {
-            .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext    = nullptr,
-            .flags    = 0,
-            .image    = VK_NULL_HANDLE,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format   = swapchain.image_format.format,
-            .components =
-                {
-                    .r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .a = VK_COMPONENT_SWIZZLE_IDENTITY,
-                },
-            .subresourceRange =
-                {
-                    .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel   = 0,
-                    .levelCount     = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount     = 1,
-                },
-        };
-        for (uint32_t i = 0; i < effective_image_count; i++)
+        bool swapchain_image_used = false;
+        for (size_t stage_i = 0; stage_i < swapchain.render_stages.size(); stage_i++)
         {
-            image_view_create_info.image = swapchain.images[i];
-            vk_check(vkCreateImageView(device, &image_view_create_info, nullptr, &swapchain.image_views[i]),
-                     "Failed to create image view for swapchain image");
+            auto       &stage      = swapchain.render_stages[stage_i];
+            const auto &stage_desc = render_pipeline_description.stages[stage_i];
+
+            // Init attachment arrays
+            stage.attachments = Array<Array<AllocatedImage>>(swapchain.image_count);
+            for (size_t i = 0; i < stage.attachments.size(); i++)
+            {
+                stage.attachments[i] = Array<AllocatedImage>(stage_desc.attachments.size());
+            }
+
+            for (size_t attachment_i = 0; attachment_i < stage_desc.attachments.size(); attachment_i++)
+            {
+                const auto &attachment_desc = stage_desc.attachments[attachment_i];
+
+                // Will be used for window => swapchain image
+                if (attachment_desc.final_layout == ImageLayout::PRESENT_SRC)
+                {
+                    check(!swapchain_image_used, "Window image can only be used one time in a render pipeline.");
+
+                    // Get the swapchain images
+                    Array<VkImage> swapchain_images(swapchain.image_count);
+                    vk_check(vkGetSwapchainImagesKHR(device, swapchain.vk_swapchain, &swapchain.image_count, swapchain_images.data()));
+
+                    // Create image views for those images
+                    VkImageViewCreateInfo image_view_create_info {
+                        .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                        .pNext    = nullptr,
+                        .flags    = 0,
+                        .image    = VK_NULL_HANDLE,
+                        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                        .format   = swapchain.image_format.format,
+                        .components =
+                            {
+                                .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+                                .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+                            },
+                        .subresourceRange =
+                            {
+                                .aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT,
+                                .baseMipLevel   = 0,
+                                .levelCount     = 1,
+                                .baseArrayLayer = 0,
+                                .layerCount     = 1,
+                            },
+                    };
+                    for (uint32_t image_i = 0; image_i < swapchain.image_count; image_i++)
+                    {
+                        // Store the image data in the stage
+                        stage.attachments[image_i][attachment_i].allocation = VK_NULL_HANDLE;
+                        stage.attachments[image_i][attachment_i].image      = swapchain_images[image_i];
+
+                        image_view_create_info.image = swapchain_images[image_i];
+                        vk_check(vkCreateImageView(device,
+                                                   &image_view_create_info,
+                                                   nullptr,
+                                                   &stage.attachments[image_i][attachment_i].image_view),
+                                 "Failed to create image view for swapchain image");
+                    }
+
+                    swapchain_image_used = true;
+                }
+                // Depth image
+                else if (attachment_desc.final_layout == ImageLayout::DEPTH_STENCIL_OPTIMAL)
+                {
+                    const VkExtent3D depth_image_extent = {extent.width, extent.height, 1};
+                    for (uint32_t image_i = 0; image_i < swapchain.image_count; image_i++)
+                    {
+                        stage.attachments[image_i][attachment_i] =
+                            allocator.create_image(convert_format(attachment_desc.format, swapchain.image_format.format),
+                                                   depth_image_extent,
+                                                   VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                                   VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                   VMA_MEMORY_USAGE_GPU_ONLY);
+                    }
+                }
+                // Intermediate image
+                else if (attachment_desc.final_layout == ImageLayout::SHADER_READ_ONLY_OPTIMAL) {
+                    const VkExtent3D image_extent = {extent.width, extent.height, 1};
+                    for (uint32_t image_i = 0; image_i < swapchain.image_count; image_i++)
+                    {
+                        stage.attachments[image_i][attachment_i] =
+                            allocator.create_image(convert_format(attachment_desc.format, swapchain.image_format.format),
+                                                   image_extent,
+                                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                   VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   VMA_MEMORY_USAGE_GPU_ONLY);
+                    }
+                }
+                // Other
+                else
+                {
+                    const VkExtent3D image_extent = {extent.width, extent.height, 1};
+                    for (uint32_t image_i = 0; image_i < swapchain.image_count; image_i++)
+                    {
+                        stage.attachments[image_i][attachment_i] =
+                            allocator.create_image(convert_format(attachment_desc.format, swapchain.image_format.format),
+                                                   image_extent,
+                                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+                                                   VK_IMAGE_ASPECT_COLOR_BIT,
+                                                   VMA_MEMORY_USAGE_GPU_ONLY);
+                    }
+                }
+            }
+
+            // Init framebuffers
+
+            // Create the final framebuffer array, and a temporary attachment array to store image views for their creation
+            Array<VkImageView> attachments_views(stage_desc.attachments.size());
+            stage.framebuffers = Array<VkFramebuffer>(swapchain.image_count);
+
+            VkFramebufferCreateInfo framebuffer_create_info {
+                .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .pNext           = nullptr,
+                .flags           = 0,
+                .renderPass      = render_stages[stage_i].vk_render_pass,
+                .attachmentCount = static_cast<uint32_t>(attachments_views.size()),
+                .pAttachments    = attachments_views.data(),
+                .width           = extent.width,
+                .height          = extent.height,
+                .layers          = 1,
+            };
+
+            for (size_t image_i = 0; image_i < swapchain.image_count; image_i++)
+            {
+                // Get image views for this image index
+                for (size_t attachment_i = 0; attachment_i < stage.attachments[image_i].size(); attachment_i++)
+                {
+                    attachments_views[attachment_i] = stage.attachments[image_i][attachment_i].image_view;
+                }
+
+                vk_check(vkCreateFramebuffer(device, &framebuffer_create_info, nullptr, &stage.framebuffers[image_i]),
+                         "Failed to create framebuffer");
+            }
         }
-
-        // endregion
-
-        // region Depth image creation
-
-        VkExtent3D depth_image_extent = {extent.width, extent.height, 1};
-        swapchain.depth_image_format  = VK_FORMAT_D32_SFLOAT;
-        swapchain.depth_image         = allocator.create_image(swapchain.depth_image_format,
-                                                       depth_image_extent,
-                                                       VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
-                                                       VK_IMAGE_ASPECT_DEPTH_BIT,
-                                                       VMA_MEMORY_USAGE_GPU_ONLY);
-
-        // endregion
-
-        // region Framebuffer creation
-
-        swapchain.framebuffers = Array<VkFramebuffer>(effective_image_count);
-
-        VkImageView attachments[2] {};
-        attachments[1] = swapchain.depth_image.image_view;
-        VkFramebufferCreateInfo framebuffer_create_info {
-            .sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext           = nullptr,
-            .flags           = 0,
-            .renderPass      = passes.lighting_pass,
-            .attachmentCount = 2,
-            .pAttachments    = attachments,
-            .width           = extent.width,
-            .height          = extent.height,
-            .layers          = 1,
-        };
-
-        for (uint32_t i = 0; i < effective_image_count; i++)
-        {
-            attachments[0] = swapchain.image_views[i];
-            vk_check(vkCreateFramebuffer(device, &framebuffer_create_info, nullptr, &swapchain.framebuffers[i]),
-                     "Failed to create framebuffer");
-        }
-
-        // endregion
     }
 
     void Renderer::Data::recreate_swapchain(Swapchain &swapchain, const Extent2D &new_extent)
@@ -1489,20 +1609,48 @@ namespace rg
 
         // endregion
 
-        // region Create vertex input state
-        const auto vertex_input_description = get_vertex_description();
+        // region Get render stage
 
-        // Default for now because we don't have vertex input
+        size_t stage_index = 0;
+        bool   stage_found = false;
+        // Find the stage that has that stage kind
+        // Since it takes the first one, there is no support for multiple stages with the same kind
+        for (size_t i = 0; i < render_pipeline_description.stages.size(); i++)
+        {
+            if (render_pipeline_description.stages[i].kind == effect.render_stage_kind)
+            {
+                stage_index = i;
+                stage_found = true;
+                break;
+            }
+        }
+        // Ensure that a render pass was found
+        check(stage_found, "Invalid render stage kind: couldn't find related stage. Check your render pipeline.");
+
+        // endregion
+
+        // region Create vertex input state
         VkPipelineVertexInputStateCreateInfo vertex_input_state_create_info = {
             .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext                           = nullptr,
-            .flags                           = vertex_input_description.flags,
-            .vertexBindingDescriptionCount   = vertex_input_description.binding_count,
-            .pVertexBindingDescriptions      = vertex_input_description.bindings,
-            .vertexAttributeDescriptionCount = vertex_input_description.attribute_count,
-            .pVertexAttributeDescriptions    = vertex_input_description.attributes,
-
+            .flags                           = 0,
+            .vertexBindingDescriptionCount   = 0,
+            .pVertexBindingDescriptions      = nullptr,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions    = nullptr,
         };
+
+        const bool has_vertex_input = render_pipeline_description.stages[stage_index].has_vertex_input;
+        if (has_vertex_input)
+        {
+            const auto vertex_input_description = get_vertex_description();
+
+            vertex_input_state_create_info.flags                           = vertex_input_description.flags;
+            vertex_input_state_create_info.vertexBindingDescriptionCount   = vertex_input_description.binding_count;
+            vertex_input_state_create_info.pVertexBindingDescriptions      = vertex_input_description.bindings;
+            vertex_input_state_create_info.vertexAttributeDescriptionCount = vertex_input_description.attribute_count;
+            vertex_input_state_create_info.pVertexAttributeDescriptions    = vertex_input_description.attributes;
+        }
 
         // endregion
 
@@ -1593,11 +1741,20 @@ namespace rg
 
         // region Create color blend state
 
-        VkPipelineColorBlendAttachmentState color_blend_attachment_state = {
-            .blendEnable = VK_FALSE,
-            .colorWriteMask =
-                VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-        };
+        auto                                       &stage = render_pipeline_description.stages[stage_index];
+        Vector<VkPipelineColorBlendAttachmentState> color_blend_attachments(stage.attachments.size());
+        for (uint32_t i = 0; i < stage.attachments.size(); i++)
+        {
+            // If color attachment
+            if (stage.attachments[i].final_layout != ImageLayout::DEPTH_STENCIL_OPTIMAL)
+            {
+                color_blend_attachments.push_back(VkPipelineColorBlendAttachmentState {
+                    .blendEnable = VK_FALSE,
+                    .colorWriteMask =
+                        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+                });
+            }
+        }
 
         // No blending
         VkPipelineColorBlendStateCreateInfo color_blend_state_create_info = {
@@ -1606,8 +1763,8 @@ namespace rg
             .flags           = 0,
             .logicOpEnable   = VK_FALSE,
             .logicOp         = VK_LOGIC_OP_COPY,
-            .attachmentCount = 1,
-            .pAttachments    = &color_blend_attachment_state,
+            .attachmentCount = static_cast<uint32_t>(color_blend_attachments.size()),
+            .pAttachments    = color_blend_attachments.data(),
             .blendConstants  = {0.0f, 0.0f, 0.0f, 0.0f},
         };
 
@@ -1615,31 +1772,19 @@ namespace rg
 
         // region Create depth stencil state
 
-        // Todo parameterize
+        bool                                  do_depth_test = render_pipeline_description.stages[stage_index].do_depth_test;
         VkPipelineDepthStencilStateCreateInfo depth_stencil_state_create_info = {
             .sType                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext                 = nullptr,
             .flags                 = 0,
-            .depthTestEnable       = VK_TRUE,
-            .depthWriteEnable      = VK_TRUE,
+            .depthTestEnable       = do_depth_test ? VK_TRUE : VK_FALSE,
+            .depthWriteEnable      = do_depth_test ? VK_TRUE : VK_FALSE,
             .depthCompareOp        = VK_COMPARE_OP_LESS_OR_EQUAL,
             .depthBoundsTestEnable = false,
             .stencilTestEnable     = false,
             .minDepthBounds        = 0.0f,
             .maxDepthBounds        = 1.0f,
         };
-
-        // endregion
-
-        // region Get render pass
-
-        VkRenderPass render_pass = VK_NULL_HANDLE;
-        switch (effect.render_stage_kind)
-        {
-            case RenderStageKind::GEOMETRY: render_pass = passes.geometry_pass; break;
-            case RenderStageKind::LIGHTING: render_pass = passes.lighting_pass; break;
-            default: check(false, "Invalid render stages kind");
-        }
 
         // endregion
 
@@ -1661,7 +1806,7 @@ namespace rg
             .pColorBlendState    = &color_blend_state_create_info,
             .pDynamicState       = nullptr,
             .layout              = effect.pipeline_layout,
-            .renderPass          = render_pass,
+            .renderPass          = render_stages[stage_index].vk_render_pass,
             .subpass             = 0,
             .basePipelineHandle  = VK_NULL_HANDLE,
             .basePipelineIndex   = -1,
@@ -1728,8 +1873,11 @@ namespace rg
         if (draw_cache_version > swapchain.built_draw_cache_version)
         {
             // For each stages
-            for (auto &stage : swapchain.render_stages)
+            for (size_t stage_i = 0; stage_i < render_pipeline_description.stages.size(); stage_i++)
             {
+                auto       &stage      = swapchain.render_stages[stage_i];
+                const auto &stage_desc = render_pipeline_description.stages[stage_i];
+
                 // Clear cache
                 stage.batches.clear();
 
@@ -1742,7 +1890,7 @@ namespace rg
                 for (const auto &effect : shader_effects)
                 {
                     // If the effect supports that kind
-                    if (effect.value().render_stage_kind == stage.kind)
+                    if (effect.value().render_stage_kind == stage_desc.kind)
                     {
                         // Get the pipeline
                         auto pipeline = swapchain.pipelines.get(effect.key());
@@ -1761,6 +1909,7 @@ namespace rg
                                 for (const auto &material : materials)
                                 {
                                     // Get the textures' descriptor set for this effect
+                                    check(material.value().textures_sets.size() > effect_i_in_mat.value(), "The used texture is not present in the material.");
                                     VkDescriptorSet textures_set = material.value().textures_sets[effect_i_in_mat.value()];
 
                                     // If the material has that template and there is at least one model to render
@@ -1849,14 +1998,14 @@ namespace rg
             swapchain.built_draw_cache_version = draw_cache_version;
         }
     }
-    void Renderer::Data::draw_from_cache(const RenderStage &stage,
-                                         VkCommandBuffer    cmd,
-                                         FrameData         &current_frame,
-                                         size_t             window_index) const
+    void Renderer::Data::draw_from_cache(const RenderStageInstance &stage,
+                                         VkCommandBuffer            cmd,
+                                         FrameData                 &current_frame,
+                                         size_t                     window_index) const
     {
-        constexpr uint32_t draw_stride       = sizeof(VkDrawIndexedIndirectCommand);
-        VkPipeline         bound_pipeline    = VK_NULL_HANDLE;
-        bool               global_sets_bound = false;
+        constexpr uint32_t draw_stride        = sizeof(VkDrawIndexedIndirectCommand);
+        VkPipeline         bound_pipeline     = VK_NULL_HANDLE;
+        bool               global_sets_bound  = false;
         VkDescriptorSet    bound_textures_set = VK_NULL_HANDLE;
 
         if (stage.batches.is_empty())
@@ -2295,10 +2444,13 @@ namespace rg
 
     // ---==== Renderer ====---
 
-    Renderer::Renderer(const Window  &example_window,
-                       const char    *application_name,
-                       const Version &application_version,
-                       uint32_t       window_capacity)
+    // region Base renderer functions
+
+    Renderer::Renderer(const Window               &example_window,
+                       const char                 *application_name,
+                       const Version              &application_version,
+                       uint32_t                    window_capacity,
+                       RenderPipelineDescription &&render_pipeline_description)
         : m_data(new Data)
     {
         std::cout << "Using Vulkan backend, version " << VK_API_VERSION_MAJOR(VULKAN_API_VERSION) << "."
@@ -2589,11 +2741,16 @@ namespace rg
         m_data->swapchains         = Array<Swapchain>(window_capacity);
         m_data->swapchain_capacity = window_capacity;
 
-        // --=== Render passes ===--
+        // --=== Render stages ===--
 
-        // region Render passes creation
+        // region Render stages initialization
 
         {
+            // Store pipeline description
+            // The description stores every setting we need to create render passes
+            m_data->render_pipeline_description = std::move(render_pipeline_description);
+            const auto &pipeline_desc           = m_data->render_pipeline_description;
+
             // Choose a swapchain_image_format for the given example window
             // For now we will assume that all swapchain will use that swapchain_image_format
             VkSurfaceKHR       example_surface        = example_window.get_vulkan_surface(m_data->instance);
@@ -2601,108 +2758,85 @@ namespace rg
             // Destroy the surface - this was just an example window, we will create a new one later
             vkDestroySurfaceKHR(m_data->instance, example_surface, nullptr);
 
-            // Create geometric render pass
+            // Init the array that will store the render passes
+            m_data->render_stages = Array<RenderStage>(pipeline_desc.stages.size());
 
-            VkAttachmentReference   attachment_references[3];
-            VkAttachmentDescription attachments[3];
+            for (uint32_t i = 0; i < m_data->render_stages.size(); i++)
+            {
+                const auto &stage_desc = pipeline_desc.stages[i];
 
-            // Position color buffer
-            attachments[0] = VkAttachmentDescription {
-                // Format. We need high precision for position
-                .format = VK_FORMAT_R16G16B16A16_SFLOAT,
-                // No MSAA
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                // Operators
-                .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                // Layout
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-            attachment_references[0] = VkAttachmentReference {
-                .attachment = 0,
-                .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            };
-            // Normal color buffer. Same format as position
-            attachments[1]           = attachments[0];
-            attachment_references[1] = VkAttachmentReference {
-                .attachment = 1,
-                .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            };
-            // Color + specular buffers
-            attachments[2]           = attachments[0];
-            attachments[2].format    = VK_FORMAT_R8G8B8A8_UINT;
-            attachment_references[2] = VkAttachmentReference {
-                .attachment = 2,
-                .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            };
-            // Group attachments in an array
-            auto subpass_description = VkSubpassDescription {
-                .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
-                // Color attachments
-                .colorAttachmentCount = 3,
-                .pColorAttachments    = attachment_references,
-            };
-            auto render_pass_create_info = VkRenderPassCreateInfo {
-                .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-                .pNext           = VK_NULL_HANDLE,
-                .attachmentCount = 3,
-                .pAttachments    = attachments,
-                .subpassCount    = 1,
-                .pSubpasses      = &subpass_description,
-            };
-            vk_check(vkCreateRenderPass(m_data->device, &render_pass_create_info, nullptr, &m_data->passes.geometry_pass),
-                     "Couldn't create geometry render pass");
+                m_data->render_stages[i].kind = stage_desc.kind;
 
-            // Create lighting render pass
-            VkAttachmentDescription lighting_attachments[2];
-            lighting_attachments[0] = VkAttachmentDescription {
-                // Format. We need high precision for position
-                .format = swapchain_image_format.format,
-                // No MSAA
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                // Operators
-                .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                // Layout
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            };
-            auto lighting_reference = VkAttachmentReference {
-                .attachment = 0,
-                .layout     = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            };
-            // Depth attachment
-            lighting_attachments[1] = VkAttachmentDescription {
-                // Format. We need high precision for position
-                .format = VK_FORMAT_D32_SFLOAT,
-                // No MSAA
-                .samples = VK_SAMPLE_COUNT_1_BIT,
-                // Operators
-                .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
-                .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                // Layout
-                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout   = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            };
-            auto depth_reference = VkAttachmentReference {
-                .attachment = 1,
-                .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-            };
+                // Create render pass based on the pipeline description
+                Array<VkAttachmentDescription> attachments(stage_desc.attachments.size());
+                // If we find a depth attachment, we will store it in the dedicated reference.
+                Vector<VkAttachmentReference> color_references(attachments.size());
+                bool                          depth_reference_set = false;
+                VkAttachmentReference         depth_reference     = {};
 
-            subpass_description.colorAttachmentCount    = 1;
-            subpass_description.pColorAttachments       = &lighting_reference;
-            subpass_description.pDepthStencilAttachment = &depth_reference;
-            render_pass_create_info.attachmentCount     = 2;
-            render_pass_create_info.pAttachments        = lighting_attachments;
-            vk_check(vkCreateRenderPass(m_data->device, &render_pass_create_info, nullptr, &m_data->passes.lighting_pass),
-                     "Couldn't create lighting render pass");
+                for (uint32_t att_i = 0; att_i < stage_desc.attachments.size(); att_i++)
+                {
+                    // Create refs to have cleaner code
+                    auto &att      = attachments[att_i];
+                    auto &att_desc = stage_desc.attachments[att_i];
+
+                    // Use desc to create vk attachment
+                    att.format = convert_format(att_desc.format, swapchain_image_format.format);
+                    // No MSAA
+                    att.samples = VK_SAMPLE_COUNT_1_BIT;
+                    // Operators
+                    att.loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    att.storeOp        = VK_ATTACHMENT_STORE_OP_STORE;
+                    att.stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                    att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                    // Layouts
+                    att.initialLayout = convert_layout(att_desc.initial_layout);
+                    att.finalLayout   = convert_layout(att_desc.final_layout);
+
+                    // Create a reference for the attachment
+                    bool                  is_depth_stencil_attachment = att_desc.final_layout == ImageLayout::DEPTH_STENCIL_OPTIMAL;
+                    VkAttachmentReference reference {
+                        .attachment = att_i,
+                        .layout     = is_depth_stencil_attachment ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                                                  : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                    };
+
+                    // Store the reference
+                    if (is_depth_stencil_attachment)
+                    {
+                        check(!depth_reference_set,
+                              "There cannot be more than one depth stencil attachment reference in a render stage.");
+
+                        depth_reference     = reference;
+                        depth_reference_set = true;
+                    }
+                    else
+                    {
+                        color_references.push_back(reference);
+                    }
+                }
+
+                // Create subpass and render pass
+                auto subpass_description = VkSubpassDescription {
+                    .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    // Color attachments
+                    .colorAttachmentCount = static_cast<uint32_t>(color_references.size()),
+                    .pColorAttachments    = color_references.data(),
+                    // Depth attachment
+                    .pDepthStencilAttachment = depth_reference_set ? &depth_reference : VK_NULL_HANDLE,
+                };
+                auto render_pass_create_info = VkRenderPassCreateInfo {
+                    .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+                    .pNext           = VK_NULL_HANDLE,
+                    .attachmentCount = static_cast<uint32_t>(attachments.size()),
+                    .pAttachments    = attachments.data(),
+                    .subpassCount    = 1,
+                    .pSubpasses      = &subpass_description,
+                };
+                vk_check(
+                    vkCreateRenderPass(m_data->device, &render_pass_create_info, nullptr, &m_data->render_stages[i].vk_render_pass),
+                    "Couldn't create \"" + std::string(stage_desc.name) + "\" (" + std::to_string(i) + ") render pass");
+            }
         }
         // endregion
 
@@ -2813,9 +2947,6 @@ namespace rg
         command_pool_create_info.queueFamilyIndex = m_data->graphics_queue.family_index;
         vk_check(vkCreateCommandPool(m_data->device, &command_pool_create_info, nullptr, &m_data->transfer_context.graphics_pool));
     }
-
-    // region Base renderer functions
-
     Renderer::Renderer(Renderer &&other) noexcept : m_data(other.m_data)
     {
         // Just take the other's m_data and set the original to null, so it can't access it anymore
@@ -2888,8 +3019,11 @@ namespace rg
         m_data->clear_swapchains();
 
         // Destroy render passes
-        vkDestroyRenderPass(m_data->device, m_data->passes.geometry_pass, nullptr);
-        vkDestroyRenderPass(m_data->device, m_data->passes.lighting_pass, nullptr);
+        for (auto &stage : m_data->render_stages)
+        {
+            vkDestroyRenderPass(m_data->device, stage.vk_render_pass, nullptr);
+            stage.vk_render_pass = VK_NULL_HANDLE;
+        }
 
         // Destroy allocator
         m_data->allocator.~Allocator();
@@ -3003,19 +3137,12 @@ namespace rg
         // Get window extent
         auto extent = window.get_current_extent();
 
+        // Init render stage instances
+        // Using a dynamic array allows us to define a parameter to this function to define the stages
+        swapchain.render_stages = Array<RenderStageInstance>(m_data->render_pipeline_description.stages.size());
+
         m_data->init_swapchain_inner(swapchain, extent);
 
-        // region Init render stages
-
-        // Using a dynamic array allows us to define a parameter to this function to define the stages
-        swapchain.render_stages = Array<RenderStage>(RENDER_STAGE_COUNT);
-
-        // Init stages
-        // They are hardcoded for now
-        swapchain.render_stages[0].kind = RenderStageKind::GEOMETRY;
-        swapchain.render_stages[1].kind = RenderStageKind::LIGHTING;
-
-        // endregion
 
         // region Register to window events
 
@@ -3257,7 +3384,8 @@ namespace rg
                 }
                 builder.save_descriptor_set(shader_effect.textures_set_layout, &descriptor_sets[i]);
             }
-            else {
+            else
+            {
                 // No textures, set to null
                 descriptor_sets[i] = VK_NULL_HANDLE;
             }
@@ -3711,47 +3839,57 @@ namespace rg
                 // Get next image
                 auto image_index = m_data->get_next_swapchain_image(swapchain);
 
-                // Geometric pass TODO
+                // For each stage
+                for (size_t stage_i = 0; stage_i < m_data->render_pipeline_description.stages.size(); stage_i++)
+                {
+                    const auto &stage_desc = m_data->render_pipeline_description.stages[stage_i];
+                    auto       &stage      = swapchain.render_stages[stage_i];
 
-                // Lighting pass
+                    // Get clear values of each attachment
+                    Array<VkClearValue> clear_values(stage_desc.attachments.size());
+                    for (size_t i = 0; i < stage_desc.attachments.size(); i++)
+                    {
+                        // Depth image
+                        if (stage_desc.attachments[i].final_layout == ImageLayout::DEPTH_STENCIL_OPTIMAL)
+                        {
+                            clear_values[i].depthStencil = VkClearDepthStencilValue {1.0f, 0};
+                        }
+                        // Color image
+                        else
+                        {
+                            clear_values[i].color = VkClearColorValue {0.2f, 0.2f, 0.2f, 1.0f};
+                        }
+                    }
 
-                // Choose a color to clear the screen with
-                float        flash             = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1200.f));
-                float        flash2            = std::abs(sinf(static_cast<float>(m_data->current_frame_number) / 1800.f));
-                VkClearValue clear_color_value = {
-                    .color = {.float32 = {1 - flash, flash2, flash, 1.0f}},
-                };
-                // Clear depth stencil
-                VkClearValue clear_depth_value {.depthStencil = VkClearDepthStencilValue {1.0f, 0}};
-                VkClearValue clear_values[2] = {clear_color_value, clear_depth_value};
+                    // Begin render pass
+                    VkRenderPassBeginInfo render_pass_begin_info = {
+                        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+                        .pNext = nullptr,
+                        // Render pass
+                        .renderPass = m_data->render_stages[stage_i].vk_render_pass,
+                        // Link framebuffer
+                        .framebuffer = stage.framebuffers[image_index],
+                        // Render area
+                        .renderArea = {.offset = {0, 0}, .extent = swapchain.viewport_extent},
+                        // Clear values
+                        .clearValueCount = static_cast<uint32_t>(clear_values.size()),
+                        .pClearValues    = clear_values.data(),
+                    };
+                    vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-                VkRenderPassBeginInfo render_pass_begin_info = {
-                    .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-                    .pNext = nullptr,
-                    // Render pass
-                    .renderPass = m_data->passes.lighting_pass,
-                    // Link framebuffer
-                    .framebuffer = swapchain.framebuffers[image_index],
-                    // Render area
-                    .renderArea = {.offset = {0, 0}, .extent = swapchain.viewport_extent},
-                    // Clear values
-                    .clearValueCount = 2,
-                    .pClearValues    = clear_values,
-                };
-                vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
+                    // Bind vertex and index buffers if needed
+                    if (stage_desc.has_vertex_input)
+                    {
+                        VkDeviceSize offset = 0;
+                        vkCmdBindVertexBuffers(current_frame.command_buffer, 0, 1, &m_data->vertex_buffer.buffer, &offset);
+                        vkCmdBindIndexBuffer(current_frame.command_buffer, m_data->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                    }
 
-                // Bind vertex and index buffers
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(current_frame.command_buffer, 0, 1, &m_data->vertex_buffer.buffer, &offset);
-                vkCmdBindIndexBuffer(current_frame.command_buffer, m_data->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                    // Draw
+                    m_data->draw_from_cache(stage, current_frame.command_buffer, current_frame, camera.target_swapchain_index);
 
-                // Draw
-                m_data->draw_from_cache(swapchain.render_stages[1],
-                                        current_frame.command_buffer,
-                                        current_frame,
-                                        camera.target_swapchain_index);
-
-                vkCmdEndRenderPass(current_frame.command_buffer);
+                    vkCmdEndRenderPass(current_frame.command_buffer);
+                }
 
                 // End recording and submit
                 m_data->end_recording_and_submit();

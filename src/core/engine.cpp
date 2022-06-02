@@ -1,9 +1,10 @@
 #include "railguard/core/engine.h"
 
-#include <railguard/core/renderer.h>
+#include <railguard/core/renderer/render_pipeline.h>
+#include <railguard/core/renderer/renderer.h>
 #include <railguard/core/window.h>
-#include <railguard/utils/event_sender.h>
 #include <railguard/utils/array.h>
+#include <railguard/utils/event_sender.h>
 
 #include <algorithm>
 
@@ -17,8 +18,8 @@ namespace rg
 
     struct Engine::Data
     {
-        Window   window;
-        Renderer renderer;
+        Window              window;
+        Renderer            renderer;
         EventSender<double> update_event = {};
 
         explicit Data(Window &&window, Renderer &&renderer) : window(std::move(window)), renderer(std::move(renderer))
@@ -35,7 +36,7 @@ namespace rg
         Window   window(window_extent, title);
 
         // Create renderer
-        Renderer renderer(window, title, {0, 1, 0}, 2);
+        Renderer renderer(window, title, {0, 1, 0}, 2, deferred_render_pipeline());
 
         // Save m_data in engine
         m_data = new Data(std::move(window), std::move(renderer));
@@ -50,7 +51,7 @@ namespace rg
         delete m_data;
     }
 
-    Engine::Engine(Engine &&other) noexcept: m_data(other.m_data)
+    Engine::Engine(Engine &&other) noexcept : m_data(other.m_data)
     {
         other.m_data = nullptr;
     }
@@ -60,7 +61,7 @@ namespace rg
         if (this != &other)
         {
             delete m_data;
-            m_data = other.m_data;
+            m_data       = other.m_data;
             other.m_data = nullptr;
         }
         return *this;
@@ -116,7 +117,8 @@ namespace rg
 
     Renderer &Engine::renderer() const
     {
-        if (m_data == nullptr) {
+        if (m_data == nullptr)
+        {
             throw std::runtime_error("Engine not initialized.");
         }
         return m_data->renderer;
@@ -124,7 +126,8 @@ namespace rg
 
     Window &Engine::window() const
     {
-        if (m_data == nullptr) {
+        if (m_data == nullptr)
+        {
             throw std::runtime_error("Engine not initialized.");
         }
         return m_data->window;

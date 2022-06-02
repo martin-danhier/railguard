@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <railguard/core/renderer/types.h>
 
 namespace rg
 {
@@ -9,46 +10,14 @@ namespace rg
     template<typename T>
     class Array;
     class MeshPart;
+    struct RenderPipelineDescription;
 
     struct Transform;
-
-    // ---==== Structs ====---
-
-    struct Version
-    {
-        uint32_t major = 0;
-        uint32_t minor = 0;
-        uint32_t patch = 0;
-    };
 
     // ---==== Definitions ====---
 
     constexpr Version ENGINE_VERSION = {0, 1, 0};
 
-    // ---==== Material system ====---
-
-    enum class RenderStageKind
-    {
-        INVALID  = 0,
-        GEOMETRY = 1,
-        LIGHTING = 2,
-    };
-
-    enum class ShaderStage : uint32_t
-    {
-        INVALID  = 0,
-        VERTEX   = 1,
-        FRAGMENT = 2,
-    };
-    // Operators to make it usable as flags to define several stages at once
-    constexpr ShaderStage operator|(ShaderStage a, ShaderStage b)
-    {
-        return static_cast<ShaderStage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
-    }
-    constexpr bool operator&(ShaderStage a, ShaderStage b)
-    {
-        return static_cast<bool>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
-    }
 
     enum class CameraType
     {
@@ -56,34 +25,31 @@ namespace rg
         ORTHOGRAPHIC = 1,
     };
 
-    enum class FilterMode
-    {
-        NEAREST = 0,
-        LINEAR  = 1,
-    };
-
+    // Define aliases for the storage id, that way it is more intuitive to know what the id is referring to.
+    constexpr static uint64_t NULL_ID = 0;
     /** An association of the shader and its kind. */
-    struct ShaderModule;
-
+    using ShaderModuleId     = uint64_t;
     /**
      * A shader effect defines the whole shader pipeline (what shader_modules are used, in what order, for what render stages...)
      */
-    struct ShaderEffect;
-
+    using ShaderEffectId     = uint64_t;
     /** A material template groups the common base between similar materials. It can be used to create new materials. */
-    struct MaterialTemplate;
-
+    using MaterialTemplateId = uint64_t;
     /** Defines the appearance of a model (shader effect, texture...) */
-    struct Material;
-
+    using MaterialId         = uint64_t;
+    using MeshPartId         = uint64_t;
     /** Abstract representation of a model that can be instantiated in the world. */
-    struct Model;
-
+    using ModelId            = uint64_t;
     /** Instance of a model */
-    struct RenderNode;
-
+    using RenderNodeId       = uint64_t;
+    /**
+     * A camera symbolizes the view of the world from which the scene is rendered.
+     * It is the camera which defines the projection type (as_orthographic, as_perspective, etc.), and the viewport.
+     * A camera can either render to a window or to a texture.
+     * */
+    using CameraId           = uint64_t;
     /** A texture that can be used in a material. */
-    struct Texture;
+    using TextureId          = uint64_t;
 
     /** Description of the characteristics of a texture */
     struct TextureLayout
@@ -92,24 +58,6 @@ namespace rg
         ShaderStage stages = ShaderStage::FRAGMENT;
     };
 
-    /**
-     * A camera symbolizes the view of the world from which the scene is rendered.
-     * It is the camera which defines the projection type (as_orthographic, as_perspective, etc.), and the viewport.
-     * A camera can either render to a window or to a texture.
-     * */
-    struct Camera;
-
-    // Define aliases for the storage id, that way it is more intuitive to know what the id is referring to.
-    constexpr static uint64_t NULL_ID = 0;
-    using ShaderModuleId              = uint64_t;
-    using ShaderEffectId              = uint64_t;
-    using MaterialTemplateId          = uint64_t;
-    using MaterialId                  = uint64_t;
-    using MeshPartId                  = uint64_t;
-    using ModelId                     = uint64_t;
-    using RenderNodeId                = uint64_t;
-    using CameraId                    = uint64_t;
-    using TextureId                   = uint64_t;
 
     // ---==== Main classes ====---
 
@@ -139,7 +87,8 @@ namespace rg
         Renderer(const Window  &example_window,
                  const char    *application_name,
                  const Version &application_version,
-                 uint32_t       window_capacity);
+                 uint32_t       window_capacity,
+                 RenderPipelineDescription &&render_pipeline_description);
 
         Renderer(Renderer &&other) noexcept;
 

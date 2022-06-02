@@ -1,6 +1,6 @@
 #include "railguard/core/mesh.h"
 
-#include <railguard/core/renderer.h>
+#include <railguard/core/renderer/renderer.h>
 
 #include <iostream>
 #include <tiny_obj_loader.h>

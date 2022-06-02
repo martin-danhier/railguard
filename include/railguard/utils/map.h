@@ -48,9 +48,9 @@ namespace rg
       private:
 
         // Hash map to store indices of the elements
-        HashMap m_hash_map;
+        HashMap m_hash_map = {};
         // Storage to store the actual m_data
-        Vector<Entry> m_storage;
+        Vector<Entry> m_storage = {};
 
       public:
         // Constructors
