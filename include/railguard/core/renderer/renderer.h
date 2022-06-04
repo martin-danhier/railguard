@@ -1,7 +1,8 @@
 #pragma once
 
-#include <cstdint>
 #include <railguard/core/renderer/types.h>
+
+#include <cstdint>
 
 namespace rg
 {
@@ -18,7 +19,6 @@ namespace rg
 
     constexpr Version ENGINE_VERSION = {0, 1, 0};
 
-
     enum class CameraType
     {
         PERSPECTIVE  = 0,
@@ -28,28 +28,28 @@ namespace rg
     // Define aliases for the storage id, that way it is more intuitive to know what the id is referring to.
     constexpr static uint64_t NULL_ID = 0;
     /** An association of the shader and its kind. */
-    using ShaderModuleId     = uint64_t;
+    using ShaderModuleId = uint64_t;
     /**
      * A shader effect defines the whole shader pipeline (what shader_modules are used, in what order, for what render stages...)
      */
-    using ShaderEffectId     = uint64_t;
+    using ShaderEffectId = uint64_t;
     /** A material template groups the common base between similar materials. It can be used to create new materials. */
     using MaterialTemplateId = uint64_t;
     /** Defines the appearance of a model (shader effect, texture...) */
-    using MaterialId         = uint64_t;
-    using MeshPartId         = uint64_t;
+    using MaterialId = uint64_t;
+    using MeshPartId = uint64_t;
     /** Abstract representation of a model that can be instantiated in the world. */
-    using ModelId            = uint64_t;
+    using ModelId = uint64_t;
     /** Instance of a model */
-    using RenderNodeId       = uint64_t;
+    using RenderNodeId = uint64_t;
     /**
      * A camera symbolizes the view of the world from which the scene is rendered.
      * It is the camera which defines the projection type (as_orthographic, as_perspective, etc.), and the viewport.
      * A camera can either render to a window or to a texture.
      * */
-    using CameraId           = uint64_t;
+    using CameraId = uint64_t;
     /** A texture that can be used in a material. */
-    using TextureId          = uint64_t;
+    using TextureId = uint64_t;
 
     /** Description of the characteristics of a texture */
     struct TextureLayout
@@ -57,7 +57,6 @@ namespace rg
         /** Shader stages in which the texture will be accessible. Defaults to FRAGMENT. */
         ShaderStage stages = ShaderStage::FRAGMENT;
     };
-
 
     // ---==== Main classes ====---
 
@@ -84,10 +83,10 @@ namespace rg
          * @param window_capacity The renderer can hold a constant number of different swapchains.
          * This number needs to be determined early on (e.g. nb of windows, nb of swapchains needed for XR...).
          */
-        Renderer(const Window  &example_window,
-                 const char    *application_name,
-                 const Version &application_version,
-                 uint32_t       window_capacity,
+        Renderer(const Window               &example_window,
+                 const char                 *application_name,
+                 const Version              &application_version,
+                 uint32_t                    window_capacity,
                  RenderPipelineDescription &&render_pipeline_description);
 
         Renderer(Renderer &&other) noexcept;
@@ -126,6 +125,14 @@ namespace rg
                                             const Array<TextureLayout>  &textures);
         void           destroy_shader_effect(ShaderEffectId id);
         void           clear_shader_effects();
+
+        /**
+         * Sets a shader effect as a global effect for a specific render stage. Global shader effects are used when a stage doesn't use
+         * the material system. They are ignored otherwise. One, and exactly one global effect can be used for each stage. It will be
+         * applied over a quad (6 vertices, 2 triangles), but no vertex input is provided. It is assumed that the vertex shader
+         * hardcodes the four vertices in an array.
+         */
+        void set_global_shader_effect(RenderStageKind stage_kind, ShaderEffectId effect_id);
 
         // Material templates
 

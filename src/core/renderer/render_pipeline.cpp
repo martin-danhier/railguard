@@ -11,7 +11,7 @@ namespace rg
         // Geometry stage
         stages[0].name        = "geometry";
         stages[0].kind        = RenderStageKind::DEFERRED_GEOMETRY;
-        stages[0].has_vertex_input = true;
+        stages[0].uses_material_system = true;
         stages[0].do_depth_test = false;
         stages[0].attachments = {
             // Position color buffer

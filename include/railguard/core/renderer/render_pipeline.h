@@ -24,10 +24,12 @@ namespace rg
         /** The kind of a stage is used in shader effects to specify for which stage the shader is used. */
         RenderStageKind kind = RenderStageKind::INVALID;
         /** Readable name to identify the stage in logs */
-        const char                             *name             = "";
-        Array<RenderStageAttachmentDescription> attachments      = {};
-        bool                                    has_vertex_input = false;
-        bool                                    do_depth_test    = false;
+        const char                             *name        = "";
+        Array<RenderStageAttachmentDescription> attachments = {};
+        /** If true, shader effects will use the material system (the render nodes that use materials with effects of this stage kind
+         * will be rendered). Otherwise, a single quad (actually 2 triangles) is rendered. */
+        bool uses_material_system = false;
+        bool do_depth_test        = false;
     };
 
     /**

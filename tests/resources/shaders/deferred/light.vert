@@ -1,11 +1,15 @@
 #version 450
 
-// Quad over the screen
-const vec2 vertices[4] = vec2[4](
+// 2 triangles over the screen
+const vec2 vertices[6] = vec2[6](
+    // Triangle 1
     vec2(-1.0, -1.0),
     vec2( 1.0, -1.0),
+    vec2(-1.0,  1.0),
+    // Triangle 2
     vec2( 1.0,  1.0),
-    vec2(-1.0,  1.0)
+    vec2(-1.0,  1.0),
+    vec2( 1.0, -1.0)
 );
 
 void main() {

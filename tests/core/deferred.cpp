@@ -25,11 +25,20 @@ TEST
     auto light_fragment_shader = renderer.load_shader_module("resources/shaders/deferred/light.frag.spv", rg::ShaderStage::FRAGMENT);
 
     // Create shader effects
-    auto geom_effect = renderer.create_shader_effect({geom_vertex_shader, geom_fragment_shader},
+    auto geom_effect  = renderer.create_shader_effect({geom_vertex_shader, geom_fragment_shader},
                                                      rg::RenderStageKind::DEFERRED_GEOMETRY,
                                                      {{rg::ShaderStage::FRAGMENT}});
-    auto light_effect =
-        renderer.create_shader_effect({light_vertex_shader, light_fragment_shader}, rg::RenderStageKind::DEFERRED_LIGHTING, {});
+    auto light_effect = renderer.create_shader_effect({light_vertex_shader, light_fragment_shader},
+                                                      rg::RenderStageKind::DEFERRED_LIGHTING,
+                                                      {
+                                                          // G-Buffer has 3 textures, we want them in the fragment shader
+                                                          {rg::ShaderStage::FRAGMENT},
+                                                          {rg::ShaderStage::FRAGMENT},
+                                                          {rg::ShaderStage::FRAGMENT},
+                                                      });
+
+    // Set light effect as a global effect (it doesn't use material system)
+    renderer.set_global_shader_effect(rg::RenderStageKind::DEFERRED_LIGHTING, light_effect);
 
     // Create material template
     auto material_template = renderer.create_material_template({geom_effect});

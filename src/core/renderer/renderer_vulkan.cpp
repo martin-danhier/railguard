@@ -132,6 +132,13 @@ namespace rg
         Array<ShaderEffectId> shader_effects = {};
     };
 
+    /** An attachment texture is a texture that is actually an output attachment of a render stage */
+    struct AttachmentTexture
+    {
+        size_t    attachment_index = 0;
+        VkSampler sampler          = VK_NULL_HANDLE;
+    };
+
     struct Texture
     {
         AllocatedImage image   = {};
@@ -260,9 +267,12 @@ namespace rg
          */
         Array<Array<AllocatedImage>> attachments = {};
         /** Array storing, for each image index, the related framebuffer */
-        Array<VkFramebuffer> framebuffers    = {};
-        AllocatedBuffer      indirect_buffer = {};
-        Vector<RenderBatch>  batches {5};
+        Array<VkFramebuffer>      framebuffers    = {};
+        AllocatedBuffer           indirect_buffer = {};
+        Vector<RenderBatch>       batches {5};
+        Vector<AttachmentTexture> output_textures {3};
+        /** One per image */
+        Array<VkDescriptorSet> output_textures_set = {};
     };
 
     /**
@@ -304,11 +314,6 @@ namespace rg
         VkQueue  queue        = VK_NULL_HANDLE;
     };
 
-    struct Attachment
-    {
-        Array<AllocatedImage> extra_images;
-    };
-
     struct Swapchain
     {
         bool           enabled         = false;
@@ -332,6 +337,12 @@ namespace rg
         // Since vulkan handles are just pointers, a hash map is all we need
         HashMap  pipelines             = {};
         uint64_t built_effects_version = 0;
+
+        // Internal textures
+        /** Pool that is reset every time the swapchain is recreated. Useful for resources that don't require an update at each frame,
+         * but need to be recreated with the swapchain. For example, attachment textures (like G-buffer)
+         */
+        DynamicDescriptorPool swapchain_static_descriptor_pool = {};
 
         // Render stages
         uint64_t                   built_draw_cache_version = 0;
@@ -358,6 +369,9 @@ namespace rg
         // Render pipeline
         RenderPipelineDescription render_pipeline_description = {};
         Array<RenderStage>        render_stages               = {};
+        /** Stores, for each render stage that doesn't use the material system, the id of the shader effect to use on the default quad.
+         */
+        HashMap global_shader_effects = {};
 
         // Queues
         Queue graphics_queue = {};
@@ -442,6 +456,11 @@ namespace rg
                              VkCommandBuffer            cmd,
                              FrameData                 &current_frame,
                              size_t                     window_index) const;
+        void draw_quad(const Swapchain              &swapchain,
+                       const RenderStageDescription &stage_desc,
+                       VkCommandBuffer               cmd,
+                       FrameData                    &current_frame,
+                       size_t                        window_index) const;
         template<typename T>
         void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset = 0);
         [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
@@ -1227,6 +1246,12 @@ namespace rg
                     allocator.destroy_image(attachment);
                 }
             }
+
+            for (auto &texture : stage.output_textures)
+            {
+                // Destroy samplers
+                vkDestroySampler(device, texture.sampler, nullptr);
+            }
         }
 
         // Destroy swapchain
@@ -1395,7 +1420,8 @@ namespace rg
                     }
                 }
                 // Intermediate image
-                else if (attachment_desc.final_layout == ImageLayout::SHADER_READ_ONLY_OPTIMAL) {
+                else if (attachment_desc.final_layout == ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                {
                     const VkExtent3D image_extent = {extent.width, extent.height, 1};
                     for (uint32_t image_i = 0; image_i < swapchain.image_count; image_i++)
                     {
@@ -1406,6 +1432,38 @@ namespace rg
                                                    VK_IMAGE_ASPECT_COLOR_BIT,
                                                    VMA_MEMORY_USAGE_GPU_ONLY);
                     }
+
+                    // Create a sampler for the image (maybe don't need this many and a global one would be enough ?)
+                    VkSamplerCreateInfo sampler_info = {
+                        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+                        .pNext = nullptr,
+                        .flags = 0,
+                        // Filter
+                        .magFilter  = VK_FILTER_LINEAR,
+                        .minFilter  = VK_FILTER_LINEAR,
+                        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+                        // Address mode
+                        .addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                        .mipLodBias              = 0.0f,
+                        .anisotropyEnable        = VK_FALSE,
+                        .maxAnisotropy           = 1,
+                        .compareEnable           = VK_FALSE,
+                        .compareOp               = VK_COMPARE_OP_ALWAYS,
+                        .minLod                  = 0.0f,
+                        .maxLod                  = 0.0f,
+                        .borderColor             = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+                        .unnormalizedCoordinates = VK_FALSE,
+                    };
+                    VkSampler sampler = VK_NULL_HANDLE;
+                    vk_check(vkCreateSampler(device, &sampler_info, nullptr, &sampler), "Failed to create sampler");
+
+                    // Store texture
+                    stage.output_textures.push_back(AttachmentTexture {
+                        .attachment_index = attachment_i,
+                        .sampler          = sampler,
+                    });
                 }
                 // Other
                 else
@@ -1527,15 +1585,15 @@ namespace rg
             frame.swapchain_set = VK_NULL_HANDLE;
             frame.global_set    = VK_NULL_HANDLE;
 
-            vk_check(DescriptorSetBuilder(device, frame.descriptor_pool)
-                         // Create descriptor set for all swapchains
-                         .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
-                         .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
-                         // Create descriptor set for global data (for example object matrices)
-                         .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
-                         .save_descriptor_set(global_set_layout, &frame.global_set)
-                         .build(),
-                     "Couldn't build descriptor sets.");
+            auto builder = DescriptorSetBuilder(device, frame.descriptor_pool)
+                               // Create descriptor set for all swapchains
+                               .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
+                               .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
+                               // Create descriptor set for global data (for example object matrices)
+                               .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
+                               .save_descriptor_set(global_set_layout, &frame.global_set);
+
+            vk_check(builder.build(), "Couldn't build descriptor sets.");
 
             // Update built version
             frame.built_buffers_config_version = buffer_config_version;
@@ -1640,7 +1698,7 @@ namespace rg
             .pVertexAttributeDescriptions    = nullptr,
         };
 
-        const bool has_vertex_input = render_pipeline_description.stages[stage_index].has_vertex_input;
+        const bool has_vertex_input = render_pipeline_description.stages[stage_index].uses_material_system;
         if (has_vertex_input)
         {
             const auto vertex_input_description = get_vertex_description();
@@ -1878,119 +1936,124 @@ namespace rg
                 auto       &stage      = swapchain.render_stages[stage_i];
                 const auto &stage_desc = render_pipeline_description.stages[stage_i];
 
-                // Clear cache
-                stage.batches.clear();
-
-                // Find the model_ids using the materials using a template using an effect matching the stages
-                // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
-                // this will minimize the number of binds to do
-                Vector<ModelId> stage_models(10);
-
-                // For each effect
-                for (const auto &effect : shader_effects)
+                // Only build cache for stages that use the material system
+                if (stage_desc.uses_material_system)
                 {
-                    // If the effect supports that kind
-                    if (effect.value().render_stage_kind == stage_desc.kind)
+                    // Clear cache
+                    stage.batches.clear();
+
+                    // Find the model_ids using the materials using a template using an effect matching the stages
+                    // = we want a list of model_ids, sorted by materials, which are sorted by templates, which are sorted by effects
+                    // this will minimize the number of binds to do
+                    Vector<ModelId> stage_models(10);
+
+                    // For each effect
+                    for (const auto &effect : shader_effects)
                     {
-                        // Get the pipeline
-                        auto pipeline = swapchain.pipelines.get(effect.key());
-                        check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
-
-                        // For each material template
-                        for (const auto &mat_template : material_templates)
+                        // If the effect supports that kind
+                        if (effect.value().render_stage_kind == stage_desc.kind)
                         {
-                            // If the template has that effect
-                            auto effect_i_in_mat = mat_template.value().shader_effects.find_first_of(effect.key());
-                            if (effect_i_in_mat.has_value())
+                            // Get the pipeline
+                            auto pipeline = swapchain.pipelines.get(effect.key());
+                            check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
+
+                            // For each material template
+                            for (const auto &mat_template : material_templates)
                             {
-                                // For each material
-                                // Note: if this becomes to computationally intensive, we could register materials in the template
-                                // like we do with the models
-                                for (const auto &material : materials)
+                                // If the template has that effect
+                                auto effect_i_in_mat = mat_template.value().shader_effects.find_first_of(effect.key());
+                                if (effect_i_in_mat.has_value())
                                 {
-                                    // Get the textures' descriptor set for this effect
-                                    check(material.value().textures_sets.size() > effect_i_in_mat.value(), "The used texture is not present in the material.");
-                                    VkDescriptorSet textures_set = material.value().textures_sets[effect_i_in_mat.value()];
-
-                                    // If the material has that template and there is at least one model to render
-                                    if (material.value().template_id == mat_template.key()
-                                        && !material.value().models_using_material.is_empty())
+                                    // For each material
+                                    // Note: if this becomes to computationally intensive, we could register materials in the template
+                                    // like we do with the models
+                                    for (const auto &material : materials)
                                     {
-                                        // Add a render batch
-                                        // Even though we could for now regroup them by shader effect instead of materials, this may
-                                        // change when we will add descriptor sets
-                                        // So we split batches by materials
-                                        // However, we won't bind a pipeline if it is the same as before, and batches are sorted by
-                                        // effect
-                                        stage.batches.push_back(RenderBatch {
-                                            stage_models.size(),
-                                            material.value().models_using_material.size(),
-                                            static_cast<VkPipeline>(pipeline.value()->as_ptr),
-                                            effect.value().pipeline_layout,
-                                            textures_set,
-                                        });
+                                        // Get the textures' descriptor set for this effect
+                                        check(material.value().textures_sets.size() > effect_i_in_mat.value(),
+                                              "The used texture is not present in the material.");
+                                        VkDescriptorSet textures_set = material.value().textures_sets[effect_i_in_mat.value()];
 
-                                        // Add the models using that material
-                                        stage_models.extend(material.value().models_using_material);
+                                        // If the material has that template and there is at least one model to render
+                                        if (material.value().template_id == mat_template.key()
+                                            && !material.value().models_using_material.is_empty())
+                                        {
+                                            // Add a render batch
+                                            // Even though we could for now regroup them by shader effect instead of materials, this
+                                            // may change when we will add descriptor sets So we split batches by materials However, we
+                                            // won't bind a pipeline if it is the same as before, and batches are sorted by effect
+                                            stage.batches.push_back(RenderBatch {
+                                                stage_models.size(),
+                                                material.value().models_using_material.size(),
+                                                static_cast<VkPipeline>(pipeline.value()->as_ptr),
+                                                effect.value().pipeline_layout,
+                                                textures_set,
+                                            });
+
+                                            // Add the models using that material
+                                            stage_models.extend(material.value().models_using_material);
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                // If there is something to render
-                if (!stage_models.is_empty())
-                {
-                    // Prepare draw indirect commands
-                    const VkBufferUsageFlags indirect_buffer_usage =
-                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-                    const VmaMemoryUsage indirect_buffer_memory_usage  = VMA_MEMORY_USAGE_CPU_TO_GPU;
-                    const size_t         required_indirect_buffer_size = stage_models.size() * sizeof(VkDrawIndexedIndirectCommand);
-
-                    // If it does not exist, create it
-                    if (stage.indirect_buffer.buffer == VK_NULL_HANDLE)
+                    // If there is something to render
+                    if (!stage_models.is_empty())
                     {
-                        stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
-                                                                        indirect_buffer_usage,
-                                                                        indirect_buffer_memory_usage);
+                        // Prepare draw indirect commands
+                        const VkBufferUsageFlags indirect_buffer_usage = VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+                                                                         | VK_BUFFER_USAGE_TRANSFER_DST_BIT
+                                                                         | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                        const VmaMemoryUsage indirect_buffer_memory_usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+                        const size_t required_indirect_buffer_size        = stage_models.size() * sizeof(VkDrawIndexedIndirectCommand);
+
+                        // If it does not exist, create it
+                        if (stage.indirect_buffer.buffer == VK_NULL_HANDLE)
+                        {
+                            stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
+                                                                            indirect_buffer_usage,
+                                                                            indirect_buffer_memory_usage);
+                        }
+                        // If it exists but isn't big enough, recreate it
+                        else if (stage.indirect_buffer.size < required_indirect_buffer_size)
+                        {
+                            allocator.destroy_buffer(stage.indirect_buffer);
+                            stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
+                                                                            indirect_buffer_usage,
+                                                                            indirect_buffer_memory_usage);
+                        }
+
+                        // At this point, we have an indirect buffer big enough to hold the commands we want to register
+
+                        // Register commands
+                        auto *indirect_commands =
+                            static_cast<VkDrawIndexedIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
+
+                        for (auto i = 0; i < stage_models.size(); ++i)
+                        {
+                            // Get model
+                            const auto model_id  = stage_models[i];
+                            const auto model_res = models.get(model_id);
+                            check(model_res.has_value(), "Tried to draw a model that doesn't exist.");
+                            const auto &model = model_res.value();
+
+                            // Get mesh
+                            const auto mesh_res = mesh_parts.get(model.mesh_part_id);
+                            check(mesh_res.has_value(), "Tried to draw a mesh part that doesn't exist.");
+                            const auto &part = mesh_res.value();
+                            check(part.is_uploaded, "Tried to draw a mesh part that hasn't been uploaded.");
+
+                            indirect_commands[i].vertexOffset  = static_cast<int32_t>(part.vertex_offset);
+                            indirect_commands[i].indexCount    = part.mesh_part.triangle_count() * 3;
+                            indirect_commands[i].firstIndex    = part.index_offset;
+                            indirect_commands[i].instanceCount = 1; // TODO when instances are added
+                            indirect_commands[i].firstInstance = 0;
+                        }
+
+                        allocator.unmap_buffer(stage.indirect_buffer);
                     }
-                    // If it exists but isn't big enough, recreate it
-                    else if (stage.indirect_buffer.size < required_indirect_buffer_size)
-                    {
-                        allocator.destroy_buffer(stage.indirect_buffer);
-                        stage.indirect_buffer = allocator.create_buffer(required_indirect_buffer_size,
-                                                                        indirect_buffer_usage,
-                                                                        indirect_buffer_memory_usage);
-                    }
-
-                    // At this point, we have an indirect buffer big enough to hold the commands we want to register
-
-                    // Register commands
-                    auto *indirect_commands = static_cast<VkDrawIndexedIndirectCommand *>(allocator.map_buffer(stage.indirect_buffer));
-
-                    for (auto i = 0; i < stage_models.size(); ++i)
-                    {
-                        // Get model
-                        const auto model_id  = stage_models[i];
-                        const auto model_res = models.get(model_id);
-                        check(model_res.has_value(), "Tried to draw a model that doesn't exist.");
-                        const auto &model = model_res.value();
-
-                        // Get mesh
-                        const auto mesh_res = mesh_parts.get(model.mesh_part_id);
-                        check(mesh_res.has_value(), "Tried to draw a mesh part that doesn't exist.");
-                        const auto &part = mesh_res.value();
-                        check(part.is_uploaded, "Tried to draw a mesh part that hasn't been uploaded.");
-
-                        indirect_commands[i].vertexOffset  = static_cast<int32_t>(part.vertex_offset);
-                        indirect_commands[i].indexCount    = part.mesh_part.triangle_count() * 3;
-                        indirect_commands[i].firstIndex    = part.index_offset;
-                        indirect_commands[i].instanceCount = 1; // TODO when instances are added
-                        indirect_commands[i].firstInstance = 0;
-                    }
-
-                    allocator.unmap_buffer(stage.indirect_buffer);
                 }
             }
 
@@ -2060,6 +2123,49 @@ namespace rg
 
             vkCmdDrawIndexedIndirect(cmd, stage.indirect_buffer.buffer, draw_offset, batch.count, draw_stride);
         }
+    }
+
+    void Renderer::Data::draw_quad(const Swapchain              &swapchain,
+                                   const RenderStageDescription &stage_desc,
+                                   VkCommandBuffer               cmd,
+                                   FrameData                    &current_frame,
+                                   size_t                        window_index) const
+    {
+        // Get global effect id for current stage
+        auto id_result = global_shader_effects.get(static_cast<HashMap::Key>(stage_desc.kind));
+        check(id_result.has_value() && id_result.value()->as_size != NULL_ID,
+              "Missing global shader effect for stage \"" + std::string(stage_desc.name) + "\"");
+        ShaderEffectId id = id_result.value()->as_size;
+
+        // Using the id, find the effect
+        auto effect_result = shader_effects.get(id);
+        check(effect_result.has_value(),
+              "Invalid global shader effect for stage \"" + std::string(stage_desc.name)
+                  + "\". The stored id doesn't belong to any existing shader effect.");
+        auto &effect = effect_result.value();
+
+        // Bind global sets
+        uint32_t                     camera_buffer_offset = pad_uniform_buffer_size(sizeof(GPUCameraData)) * window_index;
+        const Array<uint32_t>        offsets              = {camera_buffer_offset};
+        const Array<VkDescriptorSet> sets                 = {current_frame.swapchain_set, current_frame.global_set};
+        vkCmdBindDescriptorSets(cmd,
+                                VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                effect.pipeline_layout,
+                                0,
+                                sets.size(),
+                                sets.data(),
+                                offsets.size(),
+                                offsets.data());
+
+        // Get the pipeline
+        auto pipeline = swapchain.pipelines.get(id);
+        check(pipeline.has_value(), "Tried to draw a shader effect that was not built.");
+
+        // Bind pipeline
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, static_cast<VkPipeline>(pipeline.value()->as_ptr));
+
+        // Draw
+        vkCmdDraw(cmd, 6, 1, 0, 0);
     }
 
     // endregion
@@ -3143,7 +3249,6 @@ namespace rg
 
         m_data->init_swapchain_inner(swapchain, extent);
 
-
         // region Register to window events
 
         // "this" is moved after the creation of the renderer
@@ -3319,6 +3424,12 @@ namespace rg
             }
         }
         m_data->shader_effects.clear();
+    }
+
+    void Renderer::set_global_shader_effect(RenderStageKind stage_kind, ShaderEffectId effect_id)
+    {
+        // Override the old value
+        m_data->global_shader_effects.set(static_cast<HashMap::Key>(stage_kind), HashMap::Value {.as_size = effect_id});
     }
 
     // endregion
@@ -3877,16 +3988,25 @@ namespace rg
                     };
                     vkCmdBeginRenderPass(current_frame.command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);
 
-                    // Bind vertex and index buffers if needed
-                    if (stage_desc.has_vertex_input)
+                    if (stage_desc.uses_material_system)
                     {
+                        // Bind vertex and index buffers if needed
                         VkDeviceSize offset = 0;
                         vkCmdBindVertexBuffers(current_frame.command_buffer, 0, 1, &m_data->vertex_buffer.buffer, &offset);
                         vkCmdBindIndexBuffer(current_frame.command_buffer, m_data->index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-                    }
 
-                    // Draw
-                    m_data->draw_from_cache(stage, current_frame.command_buffer, current_frame, camera.target_swapchain_index);
+                        // Draw
+                        m_data->draw_from_cache(stage, current_frame.command_buffer, current_frame, camera.target_swapchain_index);
+                    }
+                    else
+                    {
+                        // Just draw a quad if it doesn't use the material system
+                        m_data->draw_quad(swapchain,
+                                          stage_desc,
+                                          current_frame.command_buffer,
+                                          current_frame,
+                                          camera.target_swapchain_index);
+                    }
 
                     vkCmdEndRenderPass(current_frame.command_buffer);
                 }
