@@ -1,8 +1,8 @@
-#include <railguard/core/mesh.h>
 #include <railguard/core/engine.h>
+#include <railguard/core/mesh.h>
+#include <railguard/core/renderer/render_pipeline.h>
 #include <railguard/core/renderer/renderer.h>
 #include <railguard/core/window.h>
-#include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
 #include <railguard/utils/geometry/transform.h>
 
@@ -13,7 +13,7 @@ TEST
 {
     rg::Engine engine;
 
-    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500));
+    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500, rg::basic_forward_render_pipeline()));
 
     // Setup scene
 
@@ -24,8 +24,9 @@ TEST
     auto fragment_shader = renderer.load_shader_module("resources/shaders/textured/textured.frag.spv", rg::ShaderStage::FRAGMENT);
 
     // Create a shader effect
-    auto hello_effect =
-        renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::DEFERRED_LIGHTING, {{rg::ShaderStage::FRAGMENT}});
+    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader},
+                                                      rg::RenderStageKind::FORWARD,
+                                                      {{rg::ShaderStage::FRAGMENT}});
 
     // Create a material template
     auto material_template = renderer.create_material_template({hello_effect});

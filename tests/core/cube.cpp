@@ -1,8 +1,8 @@
-#include "railguard/core/mesh.h"
+#include <railguard/core/mesh.h>
 #include <railguard/core/engine.h>
-#include <railguard/core/renderer.h>
+#include <railguard/core/renderer/render_pipeline.h>
+#include <railguard/core/renderer/renderer.h>
 #include <railguard/core/window.h>
-#include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
 #include <railguard/utils/geometry/transform.h>
 
@@ -13,7 +13,7 @@ TEST
 {
     rg::Engine engine;
 
-    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500));
+    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500, rg::basic_forward_render_pipeline()));
 
     // Setup scene
 
@@ -24,7 +24,7 @@ TEST
     auto fragment_shader = renderer.load_shader_module("resources/shaders/hello/test.frag.spv", rg::ShaderStage::FRAGMENT);
 
     // Create a shader effect
-    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::LIGHTING, {});
+    auto hello_effect = renderer.create_shader_effect({vertex_shader, fragment_shader}, rg::RenderStageKind::FORWARD, {});
 
     // Create a material template
     auto material_template = renderer.create_material_template({hello_effect});
@@ -53,8 +53,10 @@ TEST
     glm::vec3 velocity(0, 0, 0);
 
     engine.on_update()->subscribe(
-        [&model_transform](double delta_time) {
-            model_transform.rotation = rotate(model_transform.rotation, glm::radians(1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        [&model_transform](double delta_time)
+        {
+            model_transform.rotation =
+                rotate(model_transform.rotation, glm::radians(0.1f), glm::vec3(0.0f, 0.1f, 0.0f) * static_cast<float>(delta_time));
         });
 
     engine.window().on_key_event()->subscribe(

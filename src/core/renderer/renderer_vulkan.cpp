@@ -1639,7 +1639,8 @@ namespace rg
                     auto effect_id =
                         global_shader_effects.get(static_cast<HashMap::Key>(render_pipeline_description.stages[stage_i + 1].kind));
                     check(effect_id.has_value(),
-                          "Global shader effects need to be set for stages that don't use the material system.");
+                          "Global shader effects need to be set for stages that don't use the material system. Missing for \""
+                              + std::string(render_pipeline_description.stages[stage_i].name) + "\" stage.");
                     auto effect = shader_effects.get(effect_id.take()->as_size);
                     check(effect.has_value(), "");
 
@@ -2271,7 +2272,7 @@ namespace rg
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, static_cast<VkPipeline>(pipeline.value()->as_ptr));
 
         // Draw
-        vkCmdDraw(cmd, 6, 1, 0, 0);
+        vkCmdDraw(cmd, stage_desc.vertex_count, 1, 0, 0);
     }
 
     // endregion
@@ -2658,10 +2659,10 @@ namespace rg
 
     // region Base renderer functions
 
-    Renderer::Renderer(const Window               &example_window,
-                       const char                 *application_name,
-                       const Version              &application_version,
-                       uint32_t                    window_capacity,
+    Renderer::Renderer(const Window                     &example_window,
+                       const char                       *application_name,
+                       const Version                    &application_version,
+                       uint32_t                          window_capacity,
                        RenderPipelineDescription &&render_pipeline_description)
         : m_data(new Data)
     {

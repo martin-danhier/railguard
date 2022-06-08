@@ -20,6 +20,8 @@ namespace rg
     enum class RenderStageKind
     {
         INVALID = 0,
+        /** Basic forward rendering. */
+        FORWARD,
         /** Geometry stage in deferred rendering. */
         DEFERRED_GEOMETRY,
         /** Lighting stage in deferred rendering. */

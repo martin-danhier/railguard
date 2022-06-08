@@ -1,8 +1,8 @@
 #include <railguard/core/engine.h>
 #include <railguard/core/mesh.h>
+#include <railguard/core/renderer/render_pipeline.h>
 #include <railguard/core/renderer/renderer.h>
 #include <railguard/core/window.h>
-#include <railguard/utils/array.h>
 #include <railguard/utils/event_sender.h>
 #include <railguard/utils/geometry/transform.h>
 
@@ -13,7 +13,7 @@ TEST
 {
     rg::Engine engine;
 
-    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500));
+    ASSERT_NO_THROWS(engine = rg::Engine("My wonderful game", 500, 500, rg::deferred_render_pipeline()));
 
     // Setup scene
     auto &renderer = engine.renderer();

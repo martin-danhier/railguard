@@ -29,14 +29,14 @@ namespace rg
 
     // --==== Constructors ====--
 
-    Engine::Engine(const char *title, uint32_t width, uint32_t height)
+    Engine::Engine(const char *title, uint32_t width, uint32_t height, RenderPipelineDescription &&pipeline_description)
     {
         // Create window
         Extent2D window_extent = {width, height};
         Window   window(window_extent, title);
 
         // Create renderer
-        Renderer renderer(window, title, {0, 1, 0}, 2, deferred_render_pipeline());
+        Renderer renderer(window, title, {0, 1, 0}, 2, std::move(pipeline_description));
 
         // Save m_data in engine
         m_data = new Data(std::move(window), std::move(renderer));
