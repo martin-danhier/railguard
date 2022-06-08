@@ -1,9 +1,10 @@
 #include "railguard/core/engine.h"
 
-#include <railguard/core/renderer.h>
+#include <railguard/core/renderer/render_pipeline.h>
+#include <railguard/core/renderer/renderer.h>
 #include <railguard/core/window.h>
-#include <railguard/utils/event_sender.h>
 #include <railguard/utils/array.h>
+#include <railguard/utils/event_sender.h>
 
 #include <algorithm>
 
@@ -17,8 +18,9 @@ namespace rg
 
     struct Engine::Data
     {
-        Window   window;
-        Renderer renderer;
+        Window              window;
+        Renderer            renderer;
+        EventSender<double> update_event = {};
 
         explicit Data(Window &&window, Renderer &&renderer) : window(std::move(window)), renderer(std::move(renderer))
         {
@@ -27,16 +29,14 @@ namespace rg
 
     // --==== Constructors ====--
 
-    Engine::Engine()
+    Engine::Engine(const char *title, uint32_t width, uint32_t height, RenderPipelineDescription &&pipeline_description)
     {
-        const char *title = "My wonderful game";
-
         // Create window
-        Extent2D window_extent = {500, 500};
+        Extent2D window_extent = {width, height};
         Window   window(window_extent, title);
 
         // Create renderer
-        Renderer renderer(window, title, {0, 1, 0}, 2);
+        Renderer renderer(window, title, {0, 1, 0}, 2, std::move(pipeline_description));
 
         // Save m_data in engine
         m_data = new Data(std::move(window), std::move(renderer));
@@ -49,6 +49,22 @@ namespace rg
     Engine::~Engine()
     {
         delete m_data;
+    }
+
+    Engine::Engine(Engine &&other) noexcept : m_data(other.m_data)
+    {
+        other.m_data = nullptr;
+    }
+
+    Engine &Engine::operator=(Engine &&other) noexcept
+    {
+        if (this != &other)
+        {
+            delete m_data;
+            m_data       = other.m_data;
+            other.m_data = nullptr;
+        }
+        return *this;
     }
 
     // --==== Methods ====--
@@ -93,12 +109,16 @@ namespace rg
 
             // Run rendering
             m_data->renderer.draw();
+
+            // Trigger update
+            m_data->update_event.send(delta_time);
         }
     }
 
     Renderer &Engine::renderer() const
     {
-        if (m_data == nullptr) {
+        if (m_data == nullptr)
+        {
             throw std::runtime_error("Engine not initialized.");
         }
         return m_data->renderer;
@@ -106,9 +126,16 @@ namespace rg
 
     Window &Engine::window() const
     {
-        if (m_data == nullptr) {
+        if (m_data == nullptr)
+        {
             throw std::runtime_error("Engine not initialized.");
         }
         return m_data->window;
     }
+
+    EventSender<double> *Engine::on_update() const
+    {
+        return &m_data->update_event;
+    }
+
 } // namespace rg

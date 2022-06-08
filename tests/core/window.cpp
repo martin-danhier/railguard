@@ -1,4 +1,4 @@
-#include "test_framework/test_framework.h"
+#include "test_framework/test_framework.hpp"
 #include <railguard/core/window.h>
 #include <railguard/utils/event_sender.h>
 
@@ -8,9 +8,13 @@
 #include <thread>
 #endif
 
+
 TEST
 {
-    rg::Window window(rg::Extent2D {800, 600}, "Test");
+
+    rg::Window window;
+
+    ASSERT_NO_THROWS(window = rg::Window(rg::Extent2D {800, 600}, "Test"));
 
     window.on_resize()->subscribe([](const rg::Extent2D &extent)
                                   { std::cout << "Resized to " << extent.width << "x" << extent.height << std::endl; });
@@ -36,4 +40,5 @@ TEST
     {
         window.handle_events();
     }
+
 }

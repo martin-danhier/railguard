@@ -21,7 +21,7 @@ namespace rg
         struct Data;
 
         // Store opaque fields for implementation
-        Data *m_data;
+        Data *m_data = nullptr;
 
         // Private method
         void expand();

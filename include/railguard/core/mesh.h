@@ -2,15 +2,19 @@
 
 #include <railguard/utils/vector.h>
 
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
 namespace rg
 {
+    using MeshPartId = uint64_t;
+    class Renderer;
+
     struct Vertex
     {
         glm::vec3 position;
         glm::vec3 normal;
-        glm::vec3 color;
+        glm::vec2 tex_coord;
     };
 
     struct Triangle
@@ -62,5 +66,15 @@ namespace rg
         {
             return m_triangles.size();
         }
+
+        // Loader
+        // Temporary, before full structure is added
+
+        /**
+         * Loads a mesh part from an OBJ file and stores it in the renderer.
+         * @return the id of the mesh part in the renderer, or NULL_ID if it failed.
+         */
+        static MeshPartId load_from_obj(const char *filename, Renderer &renderer, bool duplicate_vertices = false);
     };
+
 } // namespace rg

@@ -30,3 +30,16 @@ On Linux:
 - `ninja -C build tests` to build tests. If `tests` is not specified, only the main library is built.
 - `cd ./build/tests`
 - Run one of the test executables, e.g `./core-cube`
+
+## To-do list
+
+- [x] Basic draw
+- [x] Camera
+- [x] Mesh loading
+- [x] Texture loading
+- [ ] Pass definition
+- [ ] Lighting
+- [ ] Material parameters
+- [ ] Instancing
+- [ ] Render node tree structure, better mesh loading
+- [ ] Scene loading

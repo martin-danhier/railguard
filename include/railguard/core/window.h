@@ -30,6 +30,30 @@ namespace rg
         bool down;
     };
 
+    // Some windowing APIs require specific functions to be called once at the beginning and end of the program
+    // This class provides an API-independent way to do that
+    // When using the library, you must always call `WindowManager::init()` before using any other function, and call
+    // `WindowManager::quit()` when you're done
+//    class WindowManager {
+//      private:
+//        static WindowManager *m_instance;
+//
+//      protected:
+//        // Define init statements here
+//        WindowManager();
+//        // Define quit statements here
+//        ~WindowManager();
+//      public:
+//        [[nodiscard]] static bool is_initialized() { return m_instance != nullptr; }
+//
+//        static void init() {
+//            if (!is_initialized())
+//            {
+//                m_instance = new WindowManager();
+//            }
+//        }
+//    };
+
     // Window handler. Points to a window object and provides functions to handle it.
     class Window
     {
@@ -41,11 +65,15 @@ namespace rg
         Data *m_data = nullptr;
 
       public:
+        Window() = default;
         // Constructor
         Window(Extent2D extent, const char *title);
         // No copy constructor: we want only 1 handler per window because we don't have a reference size to handle deletion properly
         Window(Window &&other) noexcept;
         ~Window();
+
+        // Move assignment operator
+        Window &operator=(Window &&other) noexcept;
 
         /**
          * Updates the frame time counter and computes the delta time.

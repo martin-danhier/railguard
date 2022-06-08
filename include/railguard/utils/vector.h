@@ -188,11 +188,6 @@ namespace rg
             return *static_cast<const T *>(m_impl.last_element());
         }
 
-        [[nodiscard]] inline bool is_empty() const
-        {
-            return m_impl.is_empty();
-        }
-
         // Copy
 
         /**
