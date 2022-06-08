@@ -37,7 +37,7 @@ On Linux:
 - [x] Camera
 - [x] Mesh loading
 - [x] Texture loading
-- [ ] Pass definition
+- [x] Pass definition
 - [ ] Lighting
 - [ ] Material parameters
 - [ ] Instancing
