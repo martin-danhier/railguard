@@ -239,6 +239,18 @@ namespace rg
 
     // --- Types ---
 
+    enum class InfoType
+    {
+        BUFFER,
+        IMAGE,
+    };
+
+    struct InfoPtr
+    {
+        size_t   index     = 0;
+        InfoType info_type = InfoType::BUFFER;
+    };
+
     struct DescriptorSetBuilder::Data
     {
         // Reference to the types we will need
@@ -252,8 +264,12 @@ namespace rg
         DescriptorBalance              current_balance = {};
         Vector<VkDescriptorBufferInfo> buffer_infos {2};
         Vector<VkDescriptorImageInfo>  image_infos {2};
-        Vector<VkWriteDescriptorSet>   write_descriptor_sets {2};
-        Vector<DescriptorBalance>      balances {2};
+        // We cannot directly store the pointers to buffer and image infos in the writes until the build function,
+        // because the vectors might grow. If this happened, the set pointers would continue to point to old data.
+        // To solve this, we store the index instead and update the writes just before submitting them.
+        Vector<InfoPtr>              info_ptrs {2};
+        Vector<VkWriteDescriptorSet> write_descriptor_sets {2};
+        Vector<DescriptorBalance>    balances {2};
     };
 
     // --- Methods ---
@@ -272,6 +288,12 @@ namespace rg
 
     DescriptorSetBuilder &DescriptorSetBuilder::add_buffer(VkDescriptorType type, VkBuffer buffer, size_t range, size_t offset)
     {
+        // Save index
+        m_data->info_ptrs.push_back(InfoPtr {
+            .index     = m_data->buffer_infos.size(),
+            .info_type = InfoType::BUFFER,
+        });
+
         // Set buffer info
         m_data->buffer_infos.push_back(VkDescriptorBufferInfo {
             .buffer = buffer,
@@ -289,7 +311,7 @@ namespace rg
             .descriptorCount  = 1,
             .descriptorType   = type,
             .pImageInfo       = nullptr,
-            .pBufferInfo      = &m_data->buffer_infos.last(),
+            .pBufferInfo      = nullptr,
             .pTexelBufferView = nullptr,
         });
 
@@ -325,6 +347,12 @@ namespace rg
 
     DescriptorSetBuilder &DescriptorSetBuilder::add_combined_image_sampler(VkSampler sampler, VkImageView image_view)
     {
+        // Save index
+        m_data->info_ptrs.push_back(InfoPtr {
+            .index     = m_data->image_infos.size(),
+            .info_type = InfoType::IMAGE,
+        });
+
         // Set buffer info
         m_data->image_infos.push_back(VkDescriptorImageInfo {
             .sampler     = sampler,
@@ -341,7 +369,7 @@ namespace rg
             .dstArrayElement  = 0,
             .descriptorCount  = 1,
             .descriptorType   = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo       = &m_data->image_infos.last(),
+            .pImageInfo       = nullptr,
             .pBufferInfo      = nullptr,
             .pTexelBufferView = nullptr,
         });
@@ -385,6 +413,15 @@ namespace rg
             for (size_t j = w; j < w + m_data->binding_counts[i]; ++j)
             {
                 m_data->write_descriptor_sets[j].dstSet = *m_data->sets[i];
+
+                // Set info pointers
+                auto &info_ptr = m_data->info_ptrs[j];
+                if (info_ptr.info_type == InfoType::BUFFER) {
+                    m_data->write_descriptor_sets[j].pBufferInfo = &m_data->buffer_infos[info_ptr.index];
+                }
+                else {
+                    m_data->write_descriptor_sets[j].pImageInfo = &m_data->image_infos[info_ptr.index];
+                }
             }
             w += m_data->binding_counts[i];
         }

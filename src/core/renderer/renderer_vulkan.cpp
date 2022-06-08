@@ -345,8 +345,12 @@ namespace rg
         DynamicDescriptorPool swapchain_static_descriptor_pool = {};
 
         // Render stages
-        uint64_t                   built_draw_cache_version = 0;
-        Array<RenderStageInstance> render_stages            = {};
+        uint64_t                   built_draw_cache_version        = 0;
+        uint32_t                   built_internal_textures_version = 0;
+        Array<RenderStageInstance> render_stages                   = {};
+
+        // Swapchain version (incremented at each recreation)
+        uint32_t swapchain_version = 0;
     };
 
     struct Renderer::Data
@@ -447,6 +451,7 @@ namespace rg
         void                     destroy_pipeline(Swapchain &swapchain, ShaderEffectId shader_effect_id) const;
         void                     update_storage_buffers(FrameData &frame);
         void                     update_descriptor_sets(FrameData &frame) const;
+        void                     update_render_stages_output_sets(Swapchain &swapchain) const;
 
         void update_stage_cache(Swapchain &swapchain);
 
@@ -456,11 +461,12 @@ namespace rg
                              VkCommandBuffer            cmd,
                              FrameData                 &current_frame,
                              size_t                     window_index) const;
-        void draw_quad(const Swapchain              &swapchain,
-                       const RenderStageDescription &stage_desc,
-                       VkCommandBuffer               cmd,
-                       FrameData                    &current_frame,
-                       size_t                        window_index) const;
+        void draw_quad(const Swapchain &swapchain,
+                       size_t           stage_index,
+                       size_t           image_index,
+                       VkCommandBuffer  cmd,
+                       FrameData       &current_frame,
+                       size_t           window_index) const;
         template<typename T>
         void                 copy_buffer_to_gpu(const T &src, AllocatedBuffer &dst, size_t offset = 0);
         [[nodiscard]] size_t pad_uniform_buffer_size(size_t original_size) const;
@@ -1230,6 +1236,10 @@ namespace rg
 
     void Renderer::Data::destroy_swapchain_inner(Swapchain &swapchain) const
     {
+        // Reset descriptor pool to destroy all descriptor sets that pointed to this data
+        vk_check(swapchain.swapchain_static_descriptor_pool.reset(), "Failed to reset swapchain-static descriptor pool");
+        swapchain.built_internal_textures_version = 0;
+
         for (auto &stage : swapchain.render_stages)
         {
             for (auto &framebuffer : stage.framebuffers)
@@ -1252,6 +1262,7 @@ namespace rg
                 // Destroy samplers
                 vkDestroySampler(device, texture.sampler, nullptr);
             }
+            stage.output_textures.clear();
         }
 
         // Destroy swapchain
@@ -1280,6 +1291,9 @@ namespace rg
 
             destroy_swapchain_inner(swapchain);
 
+            // Destroy descriptor pool
+            swapchain.swapchain_static_descriptor_pool.clear();
+
             // Destroy surface
             vkDestroySurfaceKHR(instance, swapchain.surface, nullptr);
             swapchain.surface = VK_NULL_HANDLE;
@@ -1302,6 +1316,9 @@ namespace rg
 
     void Renderer::Data::init_swapchain_inner(Swapchain &swapchain, const Extent2D &extent) const
     {
+        // Increment version
+        swapchain.swapchain_version++;
+
         // region Swapchain creation
 
         // Save extent
@@ -1585,18 +1602,85 @@ namespace rg
             frame.swapchain_set = VK_NULL_HANDLE;
             frame.global_set    = VK_NULL_HANDLE;
 
-            auto builder = DescriptorSetBuilder(device, frame.descriptor_pool)
-                               // Create descriptor set for all swapchains
-                               .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
-                               .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
-                               // Create descriptor set for global data (for example object matrices)
-                               .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
-                               .save_descriptor_set(global_set_layout, &frame.global_set);
-
-            vk_check(builder.build(), "Couldn't build descriptor sets.");
+            vk_check(DescriptorSetBuilder(device, frame.descriptor_pool)
+                         // Create descriptor set for all swapchains
+                         .add_dynamic_uniform_buffer(frame.camera_info_buffer.buffer, sizeof(GPUCameraData))
+                         .save_descriptor_set(swapchain_set_layout, &frame.swapchain_set)
+                         // Create descriptor set for global data (for example object matrices)
+                         .add_storage_buffer(frame.object_info_buffer.buffer, sizeof(GPUObjectData) * object_data_capacity)
+                         .save_descriptor_set(global_set_layout, &frame.global_set)
+                         .build(),
+                     "Couldn't build descriptor sets.");
 
             // Update built version
             frame.built_buffers_config_version = buffer_config_version;
+        }
+    }
+
+    void Renderer::Data::update_render_stages_output_sets(Swapchain &swapchain) const
+    {
+        // Was the swapchain recreated since the last check ?
+        // If so, swapchain images were recreated and descriptor sets deleted, and we
+        // need to create them again.
+        if (swapchain.built_internal_textures_version < swapchain.swapchain_version)
+        {
+            // Always ignore last stage for now: textures there will not be considered, because there is no next stage to use them.
+            for (size_t stage_i = 0; stage_i < swapchain.render_stages.size() - 1; stage_i++)
+            {
+                auto &stage = swapchain.render_stages[stage_i];
+
+                // If there are textures in that stage, we need to create descriptor sets
+                if (!stage.output_textures.is_empty())
+                {
+                    // Find descriptor layout in the effect of the next stage (assuming it's a global one)
+                    // If it is not a global one, too bad for now.
+                    // TODO maybe later: if the next stage uses the material system, which layout to use ?
+                    // Or move the layout in the current stage (and leave the effect's one to null)
+                    auto effect_id =
+                        global_shader_effects.get(static_cast<HashMap::Key>(render_pipeline_description.stages[stage_i + 1].kind));
+                    check(effect_id.has_value(),
+                          "Global shader effects need to be set for stages that don't use the material system.");
+                    auto effect = shader_effects.get(effect_id.take()->as_size);
+                    check(effect.has_value(), "");
+
+                    // Create descriptor builder
+                    DescriptorSetBuilder builder(device, swapchain.swapchain_static_descriptor_pool);
+
+                    // Create output array if it is not already of the right size
+                    // Array will init them to null
+                    if (stage.output_textures_set.size() != swapchain.image_count)
+                    {
+                        stage.output_textures_set = Array<VkDescriptorSet>(swapchain.image_count);
+                    }
+                    // Otherwise, ensure we have null everywhere
+                    else
+                    {
+                        stage.output_textures_set.fill(VK_NULL_HANDLE);
+                    }
+
+                    // For each swapchain image
+                    for (size_t image_i = 0; image_i < swapchain.image_count; image_i++)
+                    {
+                        // For each texture
+                        for (size_t texture_i = 0; texture_i < stage.output_textures.size(); texture_i++)
+                        {
+                            auto &texture = stage.output_textures[texture_i];
+
+                            // Add it to the set
+                            builder.add_combined_image_sampler(texture.sampler,
+                                                               stage.attachments[image_i][texture.attachment_index].image_view);
+                        }
+                        // Store the set
+                        builder.save_descriptor_set(effect->textures_set_layout, &stage.output_textures_set[image_i]);
+                    }
+
+                    // Save everything
+                    vk_check(builder.build());
+                }
+            }
+
+            // Update version to avoid running this again until necessary
+            swapchain.built_internal_textures_version = swapchain.swapchain_version;
         }
     }
 
@@ -2125,12 +2209,15 @@ namespace rg
         }
     }
 
-    void Renderer::Data::draw_quad(const Swapchain              &swapchain,
-                                   const RenderStageDescription &stage_desc,
-                                   VkCommandBuffer               cmd,
-                                   FrameData                    &current_frame,
-                                   size_t                        window_index) const
+    void Renderer::Data::draw_quad(const Swapchain &swapchain,
+                                   size_t           stage_index,
+                                   size_t           image_index,
+                                   VkCommandBuffer  cmd,
+                                   FrameData       &current_frame,
+                                   size_t           window_index) const
     {
+        auto &stage_desc = render_pipeline_description.stages[stage_index];
+
         // Get global effect id for current stage
         auto id_result = global_shader_effects.get(static_cast<HashMap::Key>(stage_desc.kind));
         check(id_result.has_value() && id_result.value()->as_size != NULL_ID,
@@ -2156,6 +2243,25 @@ namespace rg
                                 sets.data(),
                                 offsets.size(),
                                 offsets.data());
+
+        // Bind attachment set if needed (to access output attachments of the previous stage, for example for lighting stage in
+        // deferred rendering).
+        if (stage_index != 0)
+        {
+            auto &previous_stage = swapchain.render_stages[stage_index - 1];
+            if (!previous_stage.output_textures.is_empty())
+            {
+                VkDescriptorSet attachments_set = previous_stage.output_textures_set[image_index];
+                vkCmdBindDescriptorSets(cmd,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        effect.pipeline_layout,
+                                        2,
+                                        1,
+                                        &attachments_set,
+                                        0,
+                                        nullptr);
+            }
+        }
 
         // Get the pipeline
         auto pipeline = swapchain.pipelines.get(id);
@@ -3163,6 +3269,10 @@ namespace rg
               "Attempted to create a swapchain in a slot where there was already an active one."
               " To recreate a swapchain, see rg_renderer_recreate_swapchain.");
 
+        // Reset versions
+        swapchain.swapchain_version     = 0;
+        swapchain.built_effects_version = 0;
+
         // region Window & Surface
 
         // Get the window's surface
@@ -3246,6 +3356,9 @@ namespace rg
         // Init render stage instances
         // Using a dynamic array allows us to define a parameter to this function to define the stages
         swapchain.render_stages = Array<RenderStageInstance>(m_data->render_pipeline_description.stages.size());
+
+        // Init descriptor pool for "swapchain-lived" sets
+        swapchain.swapchain_static_descriptor_pool = DynamicDescriptorPool(m_data->device, {.combined_image_sampler_count = 10});
 
         m_data->init_swapchain_inner(swapchain, extent);
 
@@ -3935,6 +4048,9 @@ namespace rg
                 auto &swapchain = m_data->swapchains[camera.target_swapchain_index];
                 check(swapchain.enabled, "Active camera tries to render to a disabled swapchain.");
 
+                // Update internal textures sets if needed
+                m_data->update_render_stages_output_sets(swapchain);
+
                 // Get camera infos and send them to the shader
                 m_data->send_camera_data(camera.target_swapchain_index, camera, current_frame);
 
@@ -4002,7 +4118,8 @@ namespace rg
                     {
                         // Just draw a quad if it doesn't use the material system
                         m_data->draw_quad(swapchain,
-                                          stage_desc,
+                                          stage_i,
+                                          image_index,
                                           current_frame.command_buffer,
                                           current_frame,
                                           camera.target_swapchain_index);
